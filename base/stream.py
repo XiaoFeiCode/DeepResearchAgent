@@ -7,6 +7,7 @@ from langchain_core.tools import tool
 from tavily import TavilyClient
 
 import os
+from pprint import pformat
 
 # 使用 find_dotenv() 自动查找 .env 文件，无论你在哪个目录下运行脚本都能正确加载环境变量
 load_dotenv(find_dotenv())
@@ -59,14 +60,75 @@ deep_agent = create_deep_agent(
     """
 )
 
+
+def print_message(node_name, message):
+    message_type = message.__class__.__name__
+    content = getattr(message, "content", "")
+    tool_calls = getattr(message, "tool_calls", None) or []
+
+    print(f"\n本次处理的节点类型：{node_name}")
+    print(f"消息类型：{message_type}")
+
+    if node_name == "tools" or message_type == "ToolMessage":
+        tool_name = getattr(message, "name", None)
+        tool_call_id = getattr(message, "tool_call_id", None)
+        print("节点分类：工具返回")
+        if tool_name:
+            print(f"工具名称：{tool_name}")
+        if tool_call_id:
+            print(f"工具调用ID：{tool_call_id}")
+    else:
+        print("节点分类：模型输出")
+
+    if tool_calls:
+        print("模型准备调用的工具：")
+        for index, tool_call in enumerate(tool_calls, start=1):
+            if isinstance(tool_call, dict):
+                name = tool_call.get("name")
+                args = tool_call.get("args")
+                tool_id = tool_call.get("id")
+            else:
+                name = getattr(tool_call, "name", None)
+                args = getattr(tool_call, "args", None)
+                tool_id = getattr(tool_call, "id", None)
+
+            print(f"  {index}. 工具名称：{name}")
+            if tool_id:
+                print(f"     工具调用ID：{tool_id}")
+            print(f"     工具参数：{pformat(args, width=120)}")
+
+    if content:
+        print("消息内容：")
+        print(content if isinstance(content, str) else pformat(content, width=120))
+    else:
+        print("消息内容：<空>")
+
+
 prompt = input("输入你关系的问题：")
-result = deep_agent.stream(
+final_answer = None
+for chunk in deep_agent.stream(
     {
-        "messages":[
-        {"role":"user","content":f"{prompt}"}
-    ]
-    }
-)
+        "messages": [
+            {"role": "user", "content": prompt}
+        ]
+    },
+    stream_mode="updates",
+):
+    for node_name, state in chunk.items():
+        # 如果 state 为空，或者 state 里面没有 messages 的话，跳过
+        if not state or "messages" not in state:
+            continue
+
+        messages = state["messages"]
+        if not messages:
+            continue
+
+        last_msg = messages[-1]
+        print_message(node_name, last_msg)
+
+        content = getattr(last_msg, "content", "")
+        if last_msg.__class__.__name__ == "AIMessage" and content:
+            final_answer = content
 
 """
 结果数据说明
@@ -83,5 +145,8 @@ result = deep_agent.stream(
     ]
 }
 """
-
-print(result['messages'][-1].content)
+if final_answer:
+    print("\n最终回答：")
+    print(final_answer)
+else:
+    print("\n没有收到模型最终回答。")
