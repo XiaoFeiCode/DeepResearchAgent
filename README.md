@@ -54,6 +54,7 @@ RAGFlow 中配置的知识库与专业助手可以被项目中的 RAGFlow 子智
 - **文档生成**：生成 Markdown，并可在 Windows + Microsoft Word 环境中转换为 PDF。
 - **会话记忆**：使用 LangGraph SQLite Checkpointer 保存同一 `thread_id` 下的上下文。
 - **实时执行过程**：FastAPI WebSocket 向前端推送子智能体调用、工具调用和最终结果。
+- **可控服务生命周期**：FastAPI `lifespan` 统一初始化共享服务，关闭时取消并等待 Agent 与 WebSocket 后台任务，随后释放 SQLite、连接和事件循环资源。
 - **项目 Skill**：通过 `skills/*/SKILL.md` 为智能体注入领域路由和操作流程。
 
 ## 核心亮点
@@ -87,7 +88,12 @@ flowchart LR
 ```text
 deep_agent_project/
 ├── agent/                 # 主智能体、模型和子智能体配置
-├── api/                   # FastAPI、WebSocket、会话上下文和监控
+├── api/
+│   ├── routers/           # 任务、文件、RAGFlow 与 WebSocket 路由
+│   ├── schemas/           # Pydantic 请求模型
+│   ├── services/          # 后台任务、文件与 RAGFlow 业务逻辑
+│   ├── monitor.py         # WebSocket 执行事件监控
+│   └── server.py          # FastAPI 装配与 lifespan
 ├── prompt/                # 主智能体与子智能体提示词
 ├── skills/                # 项目内置 SKILL.md 工作流
 ├── tools/
@@ -96,7 +102,12 @@ deep_agent_project/
 │   ├── file/              # 本地文件读取工具
 │   ├── ragflow/           # RAGFlow 知识库和助手工具
 │   └── search/            # Tavily 互联网搜索工具
-├── ui/                    # Vue 3 + TypeScript 前端
+├── ui/src/
+│   ├── components/        # 聊天、执行过程、会话文件与知识库组件
+│   ├── styles/            # 工作台全局样式
+│   ├── utils/             # 前端格式化函数
+│   ├── types.ts           # 前端共享类型
+│   └── App.vue            # 页面状态与组件编排
 ├── utils/                 # 路径与文档转换辅助模块
 ├── imgs_display/          # README 功能截图
 ├── pyproject.toml         # Python 直接依赖
@@ -104,6 +115,8 @@ deep_agent_project/
 ```
 
 运行时会自动创建 `runtime/`、`output/` 和 `updated/`。这些目录包含会话状态、生成文件和上传文件，默认不会提交到 Git。
+
+后端路由只处理 HTTP/WebSocket 协议适配，具体操作由 `services/` 承担。前端 `App.vue` 保留状态与数据请求，各业务视图拆分到独立组件，便于继续扩展新工具和管理界面。
 
 ## 环境要求
 
@@ -188,10 +201,6 @@ Skill 是智能体的任务说明和决策流程，Tool 是真正执行数据库
 
 ```text
 查看 RAGFlow 中有哪些知识库
-```
-
-```text
-把我上传的文件上传到空调安装知识库并解析
 ```
 
 ```text
