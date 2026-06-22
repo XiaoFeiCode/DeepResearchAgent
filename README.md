@@ -1,4 +1,4 @@
-# Deep Agent 多智能体深度搜索
+# DeepAgent Studio：多智能体驱动的企业级深度搜索与知识增强系统
 
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-Backend-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
