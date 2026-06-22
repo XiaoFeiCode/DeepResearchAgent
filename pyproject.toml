@@ -1,13 +1,32 @@
 [project]
-name = "deepagent"
+name = "deep-agent-project"
 version = "0.1.0"
-description = "Add your description here"
+description = "A multi-agent deep research workspace with database, RAGFlow, web search, and document tools."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "deepagents",
-    "langchain-core",
-    "langchain-openai",
-    "python-dotenv",
-    "tavily-python",
+    "aiosqlite~=0.22.1",
+    "deepagents~=0.4.3",
+    "fastapi~=0.129.2",
+    "langchain~=1.2.10",
+    "langchain-core~=1.4.8",
+    "langchain-openai~=1.1.10",
+    "langgraph-checkpoint-sqlite~=3.1.0",
+    "markdown~=3.10.2",
+    "mysql-connector-python~=9.6.0",
+    "openpyxl~=3.1.5",
+    "pandas~=3.0.1",
+    "pydantic~=2.12.5",
+    "pypdf~=6.7.2",
+    "python-docx~=1.2.0",
+    "python-dotenv~=1.2.1",
+    "python-multipart~=0.0.22",
+    "pywin32==312; sys_platform == 'win32'",
+    "pyyaml~=6.0.3",
+    "ragflow-sdk~=0.24.0",
+    "sqlalchemy~=2.0.46",
+    "sqlmodel~=0.0.38",
+    "tavily-python~=0.7.21",
+    "uvicorn[standard]~=0.41.0",
+    "xlrd~=2.0.1",
 ]

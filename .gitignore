@@ -1,15 +1,73 @@
-# Python-generated files
+# Python bytecode and build output
 __pycache__/
-*.py[oc]
+*.py[cod]
+*$py.class
 build/
 dist/
 wheels/
-*.egg-info
+*.egg-info/
 
 # Virtual environments
-.venv
+.venv/
+venv/
+env/
 
-# Local configuration and uv cache
+# Local configuration and secrets
 .env
-.tmp/
-.uv-cache/
+.env.*
+!.env.example
+
+# Runtime state and generated files
+runtime/
+output/
+updated/
+test_session_*/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Logs and test artifacts
+*.log
+logs/
+.playwright-cli/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# RAGFlow source documents stay local. Keep Python integration code tracked.
+ragflow/**/*.pdf
+ragflow/**/*.docx
+ragflow/**/*.doc
+ragflow/**/*.xlsx
+ragflow/**/*.xls
+ragflow/**/*.csv
+ragflow/**/*.txt
+
+# Frontend dependencies and build output
+node_modules/
+ui/node_modules/
+ui/dist/
+ui/dist-ssr/
+*.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editors and operating-system files
+.idea/
+.vscode/
+!.vscode/extensions.json
+!ui/.vscode/
+!ui/.vscode/extensions.json
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
