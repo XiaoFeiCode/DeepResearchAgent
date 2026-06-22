@@ -58,8 +58,8 @@ RAGFlow 中配置的知识库与专业助手可以被项目中的 RAGFlow 子智
 
 ## 核心亮点
 - 🧩 多智能体架构：基于 LangGraph / DeepAgents 实现主智能体 + 子智能体协同调度
-- 🔀 Agentic RAG：支持基于任务的动态路由（SQL / RAG / Web / Graph）
-- 🗂 多源数据融合：MySQL + RAGFlow + Neo4j + Tavily 联合检索
+- 🔀 Agentic RAG：支持基于任务的动态路由（SQL / RAG / Web）
+- 🗂 多源数据融合：MySQL + RAGFlow + Tavily 联合检索
 - 🧠 智能任务拆解：主智能体自动规划执行步骤并调用工具链
 - 📡 实时流式输出：通过 WebSocket 展示 Agent 思考与执行过程
 - 📚 企业级知识库：集成 RAGFlow 实现文档检索与问答
