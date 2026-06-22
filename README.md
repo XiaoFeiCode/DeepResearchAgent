@@ -9,9 +9,15 @@
 [![RAGFlow](https://img.shields.io/badge/RAGFlow-Knowledge%20Base-00A6A6?style=flat-square)](https://github.com/infiniflow/ragflow)
 [![uv](https://img.shields.io/badge/uv-Managed-DE5FE9?style=flat-square&logo=astral&logoColor=white)](https://docs.astral.sh/uv/)
 
-一个基于 FastAPI、Vue、DeepAgents 与 LangGraph 构建的多智能体深度搜索项目。主智能体会根据问题类型，将任务路由到数据库查询、RAGFlow 知识库或互联网搜索助手，并通过 WebSocket 向前端实时展示执行过程。
+一个融合 Multi-Agent + Agentic RAG + 工具调用编排 + 实时可视化执行过程的企业级 AI 搜索与知识系统。
 
-项目面向本地开发、技术学习和作品展示，重点演示多智能体编排、工具调用、知识库管理、结构化数据检索、联网搜索与会话记忆的完整协作流程。
+## 系统定位
+本项目面向 Agentic AI 与企业知识系统场景：
+- 多智能体任务调度机制
+- 工具调用与路由决策系统
+- RAG + GraphRAG + SQL 混合检索架构
+- 可观测的 Agent 执行过程（Observability）
+- 可扩展的企业知识增强系统设计
 
 ## 功能截图
 
@@ -49,6 +55,16 @@ RAGFlow 中配置的知识库与专业助手可以被项目中的 RAGFlow 子智
 - **会话记忆**：使用 LangGraph SQLite Checkpointer 保存同一 `thread_id` 下的上下文。
 - **实时执行过程**：FastAPI WebSocket 向前端推送子智能体调用、工具调用和最终结果。
 - **项目 Skill**：通过 `skills/*/SKILL.md` 为智能体注入领域路由和操作流程。
+
+## 核心亮点
+- 🧩 多智能体架构：基于 LangGraph / DeepAgents 实现主智能体 + 子智能体协同调度
+- 🔀 Agentic RAG：支持基于任务的动态路由（SQL / RAG / Web / Graph）
+- 🗂 多源数据融合：MySQL + RAGFlow + Neo4j + Tavily 联合检索
+- 🧠 智能任务拆解：主智能体自动规划执行步骤并调用工具链
+- 📡 实时流式输出：通过 WebSocket 展示 Agent 思考与执行过程
+- 📚 企业级知识库：集成 RAGFlow 实现文档检索与问答
+- 🧾 结构化生成：支持 Markdown 报告自动生成与导出
+- 💾 会话记忆：基于 LangGraph Checkpointer 实现 thread 级记忆隔离
 
 ## 系统架构
 
