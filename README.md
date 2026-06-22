@@ -27,7 +27,23 @@
 
 主智能体会拆解复杂任务并连续调用多个能力。下图中的任务依次使用了 RAGFlow 助手、知识库文档列表工具和 Markdown 生成工具，最终产物会出现在会话文件栏中。
 
-![多工具协作执行结果](imgs_display/multi-tool-result.png)
+![多工具协作执行结果](imgs_display/thinking-precess.png)
+
+### 示例：生成空调维修指南
+
+例如，可以向主智能体提出一个需要知识库、互联网检索和文档工具协作的任务：
+
+```text
+请结合 RAGFlow 空调知识库和公开网络资料，整理一份空调常见故障维修指南，
+包含故障判断方法、常见故障原因、处理建议、安全注意事项和日常保养建议，
+最后生成 PDF 文件。
+```
+
+主智能体会根据任务调用 RAGFlow 助手和网络搜索助手收集资料，再使用文档工具生成结构化维修手册。下面是该任务生成的 PDF 首页：
+
+![空调常见故障维修手册](imgs_display/air-conditioner-maintenance-guide.png)
+
+[查看完整的空调常见故障维修手册 PDF](imgs_display/air-conditioner-maintenance-guide.pdf)
 
 ### RAGFlow 知识库管理
 
