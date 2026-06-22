@@ -16,13 +16,14 @@ import type {
 
 const API_BASE = (import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000').replace(/\/$/, '')
 const WS_BASE = API_BASE.replace(/^http/, 'ws')
+const THREAD_STORAGE_KEY = 'deep-agent-thread-id'
 
 const getInitialThreadId = () => {
-  const savedThreadId = localStorage.getItem('deep-agent-thread-id')
+  const savedThreadId = sessionStorage.getItem(THREAD_STORAGE_KEY)
   if (savedThreadId) return savedThreadId
 
   const newThreadId = crypto.randomUUID()
-  localStorage.setItem('deep-agent-thread-id', newThreadId)
+  sessionStorage.setItem(THREAD_STORAGE_KEY, newThreadId)
   return newThreadId
 }
 
@@ -51,6 +52,23 @@ const latestAiMessage = computed(() => [...messages.value].reverse().find((messa
 const latestLogs = computed(() => latestAiMessage.value?.logs?.slice(-4) ?? [])
 const selectedDataset = computed(() => ragflowDatasets.value.find((dataset) => dataset.id === selectedDatasetId.value))
 const canSend = computed(() => status.value !== 'running' && (inputQuery.value.trim().length > 0 || selectedFiles.value.length > 0))
+
+const fetchConversationMessages = async (threadId = currentThreadId.value) => {
+  try {
+    const response = await axios.get(
+      `${API_BASE}/api/conversations/${encodeURIComponent(threadId)}/messages`,
+    )
+    messages.value = (response.data.messages ?? []).map((message: any): Message => ({
+      role: message.role === 'assistant' ? 'ai' : message.role,
+      content: message.content,
+      timestamp: message.timestamp,
+    }))
+  } catch (error: any) {
+    if (error.response?.status !== 503) {
+      console.error('Failed to restore conversation history', error)
+    }
+  }
+}
 
 const starterPrompts = [
   '查看 RAGFlow 里有哪些知识库',
@@ -325,7 +343,10 @@ const sendMessage = async () => {
   try {
     await uploadSelectedFiles(aiMessage)
     const response = await axios.post(`${API_BASE}/api/task`, { query, thread_id: currentThreadId.value })
-    if (response.data?.thread_id) currentThreadId.value = response.data.thread_id
+    if (response.data?.thread_id) {
+      currentThreadId.value = response.data.thread_id
+      sessionStorage.setItem(THREAD_STORAGE_KEY, currentThreadId.value)
+    }
   } catch (error: any) {
     messages.value.push({ role: 'system', content: `请求失败：${error.message || '未知错误'}`, timestamp: Date.now() })
     status.value = 'idle'
@@ -339,20 +360,26 @@ const handleFileChange = (event: Event) => {
   target.value = ''
 }
 
-const startNewChat = () => {
+const startNewChat = async () => {
   currentThreadId.value = crypto.randomUUID()
-  localStorage.setItem('deep-agent-thread-id', currentThreadId.value)
+  sessionStorage.setItem(THREAD_STORAGE_KEY, currentThreadId.value)
   messages.value = []
   fileList.value = []
   selectedFiles.value = []
   currentSessionPath.value = ''
   currentSessionUrl.value = ''
   status.value = 'idle'
+  try {
+    await axios.post(`${API_BASE}/api/conversations`, { thread_id: currentThreadId.value })
+  } catch (error: any) {
+    if (error.response?.status !== 503) console.error('Failed to create conversation', error)
+  }
   connectWebSocket()
 }
 
-onMounted(() => {
+onMounted(async () => {
   isSidebarOpen.value = window.innerWidth > 1120
+  await fetchConversationMessages()
   connectWebSocket()
 })
 

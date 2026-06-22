@@ -15,8 +15,6 @@
 本项目面向 Agentic AI 与企业知识系统场景：
 - 多智能体任务调度机制
 - 工具调用与路由决策系统
-- RAG + GraphRAG + SQL 混合检索架构
-- 可观测的 Agent 执行过程（Observability）
 - 可扩展的企业知识增强系统设计
 
 ## 功能截图
@@ -52,7 +50,7 @@ RAGFlow 中配置的知识库与专业助手可以被项目中的 RAGFlow 子智
 - **互联网搜索**：通过 Tavily 检索公开资料，并在回答中保留原始来源链接。
 - **文件分析**：读取 Markdown、TXT、Word、PDF 和 Excel 文件。
 - **文档生成**：生成 Markdown，并可在 Windows + Microsoft Word 环境中转换为 PDF。
-- **会话记忆**：使用 LangGraph SQLite Checkpointer 保存同一 `thread_id` 下的上下文。
+- **双层会话记忆**：LangGraph SQLite Checkpointer 保存 Agent 执行上下文，MySQL 保存前端可恢复的会话与消息记录。
 - **实时执行过程**：FastAPI WebSocket 向前端推送子智能体调用、工具调用和最终结果。
 - **可控服务生命周期**：FastAPI `lifespan` 统一初始化共享服务，关闭时取消并等待 Agent 与 WebSocket 后台任务，随后释放 SQLite、连接和事件循环资源。
 - **项目 Skill**：通过 `skills/*/SKILL.md` 为智能体注入领域路由和操作流程。
@@ -65,19 +63,21 @@ RAGFlow 中配置的知识库与专业助手可以被项目中的 RAGFlow 子智
 - 📡 实时流式输出：通过 WebSocket 展示 Agent 思考与执行过程
 - 📚 企业级知识库：集成 RAGFlow 实现文档检索与问答
 - 🧾 结构化生成：支持 Markdown 报告自动生成与导出
-- 💾 会话记忆：基于 LangGraph Checkpointer 实现 thread 级记忆隔离
+- 💾 会话记忆：SQLite 管理 Agent 检查点，MySQL 持久化聊天记录，实现 thread 级隔离和刷新恢复
 
 ## 系统架构
 
 ```mermaid
 flowchart LR
     UI[Vue 工作台] <-->|REST + WebSocket| API[FastAPI 服务]
+    UI --> SESSION[sessionStorage 当前 thread_id]
     API --> MAIN[主智能体]
+    API --> HISTORY[(MySQL 会话记录)]
     MAIN --> DB[数据库查询助手]
     MAIN --> RAG[RAGFlow 助手]
     MAIN --> WEB[互联网搜索助手]
     MAIN --> DOC[文件与文档工具]
-    DB --> MYSQL[(MySQL)]
+    DB --> MYSQL[(MySQL 业务数据)]
     RAG --> RF[(RAGFlow)]
     WEB --> TAVILY[Tavily]
     MAIN --> MEMORY[(SQLite Checkpoint)]
@@ -123,7 +123,7 @@ deep_agent_project/
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/)
 - Node.js 20+
-- MySQL，可选；数据库查询功能需要
+- MySQL，可选；数据库查询和聊天记录持久化需要，未配置时聊天记录功能会降级
 - RAGFlow，可选；知识库功能需要
 - Tavily API Key，可选；联网搜索功能需要
 - OpenAI 兼容的模型服务
@@ -211,7 +211,7 @@ Skill 是智能体的任务说明和决策流程，Tool 是真正执行数据库
 搜索 LangGraph 的最新资料，并给出原始来源链接
 ```
 
-同一会话中的追问会复用当前 `thread_id` 和 SQLite 记忆。点击“新会话”后会生成新的 `thread_id`，适合开始一个无关任务。
+同一标签页中的追问会复用当前 `thread_id`。前端将该 ID 保存在 `sessionStorage`，刷新页面后会从 MySQL 的 `agent_conversations` 和 `agent_messages` 表恢复聊天记录；LangGraph SQLite Checkpointer 则继续负责恢复 Agent 内部执行上下文。点击“新会话”会生成新的 `thread_id`，适合开始一个无关任务。关闭标签页后再次打开也会生成新会话，不会自动带入旧上下文。
 
 ## 开发验证
 
@@ -229,6 +229,7 @@ npm run build
 
 - 当前项目以本地单用户开发和能力展示为主，API 尚未加入登录、权限与限流。
 - CORS 配置适合本地调试，不建议直接暴露到公网。
-- SQLite Checkpointer 适合本地记忆；多实例部署应迁移到共享持久化存储。
+- SQLite Checkpointer 适合本地 Agent 检查点；多实例部署时应迁移到 Postgres 或 Redis 等共享 Checkpointer。
+- MySQL 当前保存聊天正文但尚未加入用户账号字段；接入登录后应增加 `user_id` 并按用户校验会话访问权限。
 - RAGFlow、MySQL、Tavily 等外部能力需要单独部署或申请对应服务。
 - `ragflow/` 下的本地知识库原始资料默认被 Git 忽略，请根据数据授权自行准备测试文件。

@@ -145,6 +145,7 @@ def _process_stream_chunk(chunk):
     Args:
         chunk (dict): 增量状态字典，如 {"node_name": {"messages": [AIMessage(...)]}}
     """
+    final_result = None
     # 1. [记录] 记录原始数据便于回溯
     # logger.log_main_chunk(chunk)
 
@@ -169,6 +170,9 @@ def _process_stream_chunk(chunk):
                 # Case 2: Agent 生成最终回复 (Final Answer)
                 elif last_msg.content:
                     monitor.report_task_result(last_msg.content)
+                    final_result = last_msg.content
+
+    return final_result
 
 
 # ====================== 核心执行逻辑 ======================
@@ -223,13 +227,16 @@ async def run_deep_agent(task_query: str, thread_id: str = None):
     try:
         agent = await get_main_agent()
         # astream: 异步生成器，像流水线一样逐个吐出 Agent 的思考片段
+        final_result = None
         async for chunk in agent.astream(
                 {"messages": [{"role": "user", "content": task_query + path_instruction}]},
                 config=config
         ):
             # 实时处理每一个片段 (上报前端)
-            _process_stream_chunk(chunk)
-        return "Done"
+            chunk_result = _process_stream_chunk(chunk)
+            if chunk_result:
+                final_result = chunk_result
+        return final_result or "Done"
     except Exception as e:
         # 7. [异常处理] 兜底捕获
         print(f"Error: {e}")
