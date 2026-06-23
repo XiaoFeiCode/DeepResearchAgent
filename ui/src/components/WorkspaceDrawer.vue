@@ -20,6 +20,7 @@ defineProps<{
 const emit = defineEmits<{
   close: []
   refresh: []
+  'download-file': [file: FileItem]
   'select-dataset': [dataset: RagflowDataset]
   'kb-file-change': [event: Event]
   'remove-kb-file': [index: number]
@@ -46,7 +47,7 @@ const emit = defineEmits<{
       </div>
     </div>
 
-    <SessionFiles v-if="mode === 'files'" :files="files" />
+    <SessionFiles v-if="mode === 'files'" :files="files" @download="emit('download-file', $event)" />
     <KnowledgeBaseManager
       v-else
       :datasets="datasets"

@@ -1,8 +1,9 @@
 import asyncio
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Security
 
 from api.schemas import ConversationCreateRequest
+from api.security import check_rbac
 from api.services import ConversationService
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
@@ -20,7 +21,11 @@ def _unavailable_error(service: ConversationService) -> HTTPException:
 
 
 @router.post("")
-async def create_conversation(payload: ConversationCreateRequest, request: Request):
+async def create_conversation(
+    payload: ConversationCreateRequest,
+    request: Request,
+    _current_user=Security(check_rbac, scopes=["conversations"]),
+):
     service = _service(request)
     if not service.available:
         raise _unavailable_error(service)
@@ -33,7 +38,11 @@ async def create_conversation(payload: ConversationCreateRequest, request: Reque
 
 
 @router.get("")
-async def list_conversations(request: Request, limit: int = 50):
+async def list_conversations(
+    request: Request,
+    limit: int = 50,
+    _current_user=Security(check_rbac, scopes=["conversations"]),
+):
     service = _service(request)
     if not service.available:
         raise _unavailable_error(service)
@@ -42,7 +51,11 @@ async def list_conversations(request: Request, limit: int = 50):
 
 
 @router.get("/{thread_id}/messages")
-async def list_conversation_messages(thread_id: str, request: Request):
+async def list_conversation_messages(
+    thread_id: str,
+    request: Request,
+    _current_user=Security(check_rbac, scopes=["conversations"]),
+):
     service = _service(request)
     if not service.available:
         raise _unavailable_error(service)

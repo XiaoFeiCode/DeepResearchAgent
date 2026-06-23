@@ -25,6 +25,7 @@ body {
 }
 
 button,
+input,
 textarea {
   font: inherit;
 }
@@ -35,6 +36,85 @@ button {
 
 button:disabled {
   cursor: not-allowed;
+}
+
+.auth-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    linear-gradient(90deg, rgba(8, 127, 140, 0.08) 1px, transparent 1px),
+    linear-gradient(0deg, rgba(216, 92, 69, 0.06) 1px, transparent 1px),
+    var(--page);
+  background-size: 42px 42px;
+}
+
+.auth-card {
+  width: min(420px, 100%);
+  display: grid;
+  gap: 16px;
+  padding: 28px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 250, 241, 0.9);
+  box-shadow: var(--shadow);
+}
+
+.auth-card h1 {
+  margin: 0;
+  font-size: 30px;
+  line-height: 1.15;
+}
+
+.auth-card p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.auth-card label {
+  display: grid;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.auth-card input {
+  min-height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+  color: var(--ink);
+  padding: 0 12px;
+  outline: none;
+}
+
+.auth-card input:focus {
+  border-color: var(--teal);
+  box-shadow: 0 0 0 3px rgba(8, 127, 140, 0.13);
+}
+
+.auth-error {
+  padding: 10px 12px;
+  border: 1px solid #efb7aa;
+  border-radius: 8px;
+  background: #ffe8df;
+  color: #7b3027;
+  font-size: 13px;
+}
+
+.auth-submit {
+  min-height: 44px;
+  border: 1px solid var(--ink);
+  border-radius: 8px;
+  background: var(--ink);
+  color: white;
+  font-weight: 900;
+}
+
+.auth-submit:disabled {
+  opacity: 0.55;
 }
 
 .app-shell {
@@ -279,6 +359,16 @@ button:disabled {
   align-items: center;
   gap: 10px;
   flex: 0 0 auto;
+}
+
+.auth-user {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
 }
 
 .files-toggle,
@@ -541,13 +631,11 @@ button:disabled {
   gap: 8px;
 }
 
-.result-files a,
 .drawer-file {
-  text-decoration: none;
   color: var(--ink);
 }
 
-.result-files a {
+.result-files button {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -555,6 +643,8 @@ button:disabled {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel-strong);
+  color: var(--ink);
+  font-weight: 800;
 }
 
 .result-files span,
@@ -747,6 +837,8 @@ button:disabled {
   align-items: center;
   padding: 10px;
   box-shadow: none;
+  width: 100%;
+  text-align: left;
 }
 
 .drawer-file strong {

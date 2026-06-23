@@ -1,7 +1,8 @@
-from fastapi import APIRouter, File, Form, Request, UploadFile
+from fastapi import APIRouter, File, Form, Request, Security, UploadFile
 from fastapi.concurrency import run_in_threadpool
 
 from api.schemas import RagflowDocumentRequest
+from api.security import check_rbac
 from api.services import RagflowService
 from tools.ragflow.base import _format_ragflow_error
 
@@ -13,7 +14,7 @@ def _service(request: Request) -> RagflowService:
 
 
 @router.get("/datasets")
-async def list_ragflow_datasets(request: Request):
+async def list_ragflow_datasets(request: Request, _current_user=Security(check_rbac, scopes=["ragflow"])):
     try:
         datasets = await run_in_threadpool(_service(request).list_datasets)
         return {"datasets": datasets}
@@ -22,7 +23,11 @@ async def list_ragflow_datasets(request: Request):
 
 
 @router.get("/documents")
-async def list_ragflow_documents(dataset_name_or_id: str, request: Request):
+async def list_ragflow_documents(
+    dataset_name_or_id: str,
+    request: Request,
+    _current_user=Security(check_rbac, scopes=["ragflow"]),
+):
     try:
         return await run_in_threadpool(
             _service(request).list_documents,
@@ -38,6 +43,7 @@ async def upload_ragflow_documents(
     files: list[UploadFile] = File(...),
     dataset_name_or_id: str = Form(...),
     parse_after_upload: bool = Form(True),
+    _current_user=Security(check_rbac, scopes=["ragflow"]),
 ):
     try:
         return await run_in_threadpool(
@@ -51,7 +57,11 @@ async def upload_ragflow_documents(
 
 
 @router.post("/documents/parse")
-async def parse_ragflow_documents(payload: RagflowDocumentRequest, request: Request):
+async def parse_ragflow_documents(
+    payload: RagflowDocumentRequest,
+    request: Request,
+    _current_user=Security(check_rbac, scopes=["ragflow"]),
+):
     try:
         return await run_in_threadpool(
             _service(request).parse_documents,
@@ -63,7 +73,11 @@ async def parse_ragflow_documents(payload: RagflowDocumentRequest, request: Requ
 
 
 @router.post("/documents/delete")
-async def delete_ragflow_documents(payload: RagflowDocumentRequest, request: Request):
+async def delete_ragflow_documents(
+    payload: RagflowDocumentRequest,
+    request: Request,
+    _current_user=Security(check_rbac, scopes=["ragflow"]),
+):
     try:
         return await run_in_threadpool(
             _service(request).delete_documents,

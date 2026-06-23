@@ -17,6 +17,7 @@ import type {
 const API_BASE = (import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000').replace(/\/$/, '')
 const WS_BASE = API_BASE.replace(/^http/, 'ws')
 const THREAD_STORAGE_KEY = 'deep-agent-thread-id'
+const AUTH_STORAGE_KEY = 'deep-agent-access-token'
 
 const getInitialThreadId = () => {
   const savedThreadId = sessionStorage.getItem(THREAD_STORAGE_KEY)
@@ -46,12 +47,93 @@ const ragflowLoading = ref(false)
 const ragflowUploading = ref(false)
 const ragflowMessage = ref('')
 const ragflowError = ref('')
+const authToken = ref(localStorage.getItem(AUTH_STORAGE_KEY) || '')
+const authUser = ref('')
+const loginUsername = ref('admin')
+const loginPassword = ref('')
+const authLoading = ref(false)
+const authError = ref('')
 let reconnectTimer: number | undefined
 
+const isAuthenticated = computed(() => authToken.value.length > 0)
 const latestAiMessage = computed(() => [...messages.value].reverse().find((message) => message.role === 'ai'))
 const latestLogs = computed(() => latestAiMessage.value?.logs?.slice(-4) ?? [])
 const selectedDataset = computed(() => ragflowDatasets.value.find((dataset) => dataset.id === selectedDatasetId.value))
 const canSend = computed(() => status.value !== 'running' && (inputQuery.value.trim().length > 0 || selectedFiles.value.length > 0))
+
+const applyAuthHeader = (token: string) => {
+  if (token) axios.defaults.headers.common.Authorization = `Bearer ${token}`
+  else delete axios.defaults.headers.common.Authorization
+}
+
+const clearAuthState = () => {
+  authToken.value = ''
+  authUser.value = ''
+  localStorage.removeItem(AUTH_STORAGE_KEY)
+  applyAuthHeader('')
+  if (reconnectTimer) window.clearTimeout(reconnectTimer)
+  const websocket = socket.value
+  socket.value = null
+  websocket?.close()
+}
+
+const validateToken = async () => {
+  if (!authToken.value) return false
+  applyAuthHeader(authToken.value)
+  try {
+    const response = await axios.get(`${API_BASE}/api/auth/me`)
+    authUser.value = response.data.username
+    return true
+  } catch {
+    clearAuthState()
+    return false
+  }
+}
+
+const login = async () => {
+  authLoading.value = true
+  authError.value = ''
+  try {
+    const formData = new URLSearchParams()
+    formData.set('username', loginUsername.value)
+    formData.set('password', loginPassword.value)
+    const response = await axios.post(`${API_BASE}/api/auth/token`, formData, {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    })
+    authToken.value = response.data.access_token
+    localStorage.setItem(AUTH_STORAGE_KEY, authToken.value)
+    applyAuthHeader(authToken.value)
+    await validateToken()
+    await fetchConversationMessages()
+    connectWebSocket()
+  } catch (error: any) {
+    authError.value = error.response?.data?.detail || error.message || '登录失败'
+  } finally {
+    authLoading.value = false
+  }
+}
+
+const logout = () => {
+  clearAuthState()
+  messages.value = []
+  fileList.value = []
+  selectedFiles.value = []
+  currentSessionPath.value = ''
+  currentSessionUrl.value = ''
+  status.value = 'idle'
+}
+
+axios.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const requestUrl = error.config?.url || ''
+    if (error.response?.status === 401 && !requestUrl.includes('/api/auth/token')) {
+      clearAuthState()
+      authError.value = '登录已过期，请重新登录'
+    }
+    return Promise.reject(error)
+  },
+)
 
 const fetchConversationMessages = async (threadId = currentThreadId.value) => {
   try {
@@ -263,9 +345,12 @@ const handleSocketMessage = (payload: any) => {
       })
       if (eventData.args?.filename && currentSessionUrl.value) {
         lastAiMessage.files ??= []
+        const filePath = currentSessionPath.value
+          ? `${currentSessionPath.value.replace(/\\/g, '/')}/${eventData.args.filename}`
+          : eventData.args.filename
         const fileUrl = `${currentSessionUrl.value}/${eventData.args.filename}`
         if (!lastAiMessage.files.some((file) => file.name === eventData.args.filename)) {
-          lastAiMessage.files.push({ name: eventData.args.filename, path: eventData.args.filename, url: fileUrl })
+          lastAiMessage.files.push({ name: eventData.args.filename, path: filePath, url: fileUrl })
         }
       }
     }
@@ -295,9 +380,10 @@ const handleSocketMessage = (payload: any) => {
 }
 
 const connectWebSocket = () => {
+  if (!authToken.value) return
   if (reconnectTimer) window.clearTimeout(reconnectTimer)
   socket.value?.close()
-  const websocket = new WebSocket(`${WS_BASE}/ws/${currentThreadId.value}`)
+  const websocket = new WebSocket(`${WS_BASE}/ws/${currentThreadId.value}?token=${encodeURIComponent(authToken.value)}`)
   websocket.onmessage = (event) => {
     try {
       handleSocketMessage(JSON.parse(event.data))
@@ -360,6 +446,25 @@ const handleFileChange = (event: Event) => {
   target.value = ''
 }
 
+const downloadFile = async (file: FileItem) => {
+  try {
+    const response = await axios.get(`${API_BASE}/api/download`, {
+      params: { path: file.path },
+      responseType: 'blob',
+    })
+    const blobUrl = URL.createObjectURL(response.data)
+    const link = document.createElement('a')
+    link.href = blobUrl
+    link.download = file.name
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(blobUrl)
+  } catch (error: any) {
+    messages.value.push({ role: 'system', content: `下载失败：${error.message || '未知错误'}`, timestamp: Date.now() })
+  }
+}
+
 const startNewChat = async () => {
   currentThreadId.value = crypto.randomUUID()
   sessionStorage.setItem(THREAD_STORAGE_KEY, currentThreadId.value)
@@ -379,8 +484,11 @@ const startNewChat = async () => {
 
 onMounted(async () => {
   isSidebarOpen.value = window.innerWidth > 1120
-  await fetchConversationMessages()
-  connectWebSocket()
+  const ok = await validateToken()
+  if (ok) {
+    await fetchConversationMessages()
+    connectWebSocket()
+  }
 })
 
 onBeforeUnmount(() => {
@@ -392,7 +500,28 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="app-shell" :class="{ 'drawer-visible': isSidebarOpen }">
+  <main v-if="!isAuthenticated" class="auth-page">
+    <form class="auth-card" @submit.prevent="login">
+      <span class="eyebrow">Secure Console</span>
+      <h1>登录 DeepAgent Studio</h1>
+      <p>访问任务执行、知识库管理和会话文件前，需要先通过 API 鉴权。</p>
+
+      <label>
+        用户名
+        <input v-model="loginUsername" autocomplete="username" />
+      </label>
+      <label>
+        密码
+        <input v-model="loginPassword" type="password" autocomplete="current-password" />
+      </label>
+      <div v-if="authError" class="auth-error">{{ authError }}</div>
+      <button class="auth-submit" type="submit" :disabled="authLoading">
+        {{ authLoading ? '登录中...' : '登录' }}
+      </button>
+    </form>
+  </main>
+
+  <div v-else class="app-shell" :class="{ 'drawer-visible': isSidebarOpen }">
     <WorkspaceRail :status="status" :thread-id="currentThreadId" :file-count="fileList.length" :logs="latestLogs" />
 
     <main class="conversation-pane">
@@ -402,6 +531,7 @@ onBeforeUnmount(() => {
           <h1>把问题、知识库和文件串起来</h1>
         </div>
         <div class="topbar-actions">
+          <span class="auth-user">{{ authUser || loginUsername }}</span>
           <button class="files-toggle" type="button" @click="openFilesDrawer">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h4l2 2h5A2.5 2.5 0 0 1 20 7.5v9A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5v-11Z" /></svg>
             文件
@@ -417,6 +547,7 @@ onBeforeUnmount(() => {
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
             新会话
           </button>
+          <button class="files-toggle" type="button" @click="logout">退出</button>
         </div>
       </header>
 
@@ -432,6 +563,7 @@ onBeforeUnmount(() => {
         @file-change="handleFileChange"
         @remove-file="selectedFiles.splice($event, 1)"
         @use-prompt="inputQuery = $event"
+        @download-file="downloadFile"
       />
     </main>
 
@@ -450,6 +582,7 @@ onBeforeUnmount(() => {
       :ragflow-error="ragflowError"
       @close="isSidebarOpen = false"
       @refresh="drawerMode === 'knowledge' ? fetchRagflowDatasets() : fetchFiles()"
+      @download-file="downloadFile"
       @select-dataset="selectRagflowDataset"
       @kb-file-change="handleKbFileChange"
       @remove-kb-file="selectedKbFiles.splice($event, 1)"

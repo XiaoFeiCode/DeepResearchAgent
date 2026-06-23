@@ -68,6 +68,7 @@ RAGFlow 中配置的知识库与专业助手可以被项目中的 RAGFlow 子智
 - **文档生成**：生成 Markdown，并可在 Windows + Microsoft Word 环境中转换为 PDF。
 - **双层会话记忆**：LangGraph SQLite Checkpointer 保存 Agent 执行上下文，MySQL 保存前端可恢复的会话与消息记录。
 - **实时执行过程**：FastAPI WebSocket 向前端推送子智能体调用、工具调用和最终结果。
+- **API 安全控制**：基于 MySQL RBAC 实现用户、角色、权限管理，提供登录换取 Bearer Token、OAuth2 Scope 校验、WebSocket Token 校验和单进程内存限流。
 - **可控服务生命周期**：FastAPI `lifespan` 统一初始化共享服务，关闭时取消并等待 Agent 与 WebSocket 后台任务，随后释放 SQLite、连接和事件循环资源。
 - **项目 Skill**：通过 `skills/*/SKILL.md` 为智能体注入领域路由和操作流程。
 
@@ -80,6 +81,7 @@ RAGFlow 中配置的知识库与专业助手可以被项目中的 RAGFlow 子智
 - 📚 企业级知识库：集成 RAGFlow 实现文档检索与问答
 - 🧾 结构化生成：支持 Markdown 报告自动生成与导出
 - 💾 会话记忆：SQLite 管理 Agent 检查点，MySQL 持久化聊天记录，实现 thread 级隔离和刷新恢复
+- 🔐 API 鉴权：基于 MySQL RBAC、Bearer Token 与 Scope 控制任务、文件、知识库和会话接口访问
 
 ## 系统架构
 
@@ -87,6 +89,9 @@ RAGFlow 中配置的知识库与专业助手可以被项目中的 RAGFlow 子智
 flowchart LR
     UI[Vue 工作台] <-->|REST + WebSocket| API[FastAPI 服务]
     UI --> SESSION[sessionStorage 当前 thread_id]
+    UI --> TOKEN[localStorage Bearer Token]
+    TOKEN --> AUTH[登录鉴权与 RBAC]
+    AUTH --> API
     API --> MAIN[主智能体]
     API --> HISTORY[(MySQL 会话记录)]
     MAIN --> DB[数据库查询助手]
@@ -109,6 +114,8 @@ deep_agent_project/
 │   ├── schemas/           # Pydantic 请求模型
 │   ├── services/          # 后台任务、文件与 RAGFlow 业务逻辑
 │   ├── monitor.py         # WebSocket 执行事件监控
+│   ├── security.py        # 登录、Token 和 Scope 权限校验
+│   ├── rate_limit.py      # 单进程内存限流中间件
 │   └── server.py          # FastAPI 装配与 lifespan
 ├── prompt/                # 主智能体与子智能体提示词
 ├── skills/                # 项目内置 SKILL.md 工作流
@@ -168,6 +175,13 @@ Copy-Item .env.example .env
 | `OPENAI_BASE_URL` | OpenAI 兼容接口地址 | 是 |
 | `OPENAI_API_KEY` | 模型服务 API Key | 是 |
 | `LLM_MODEL` | 接口实际支持的模型名 | 是 |
+| `API_AUTH_ENABLED` | 是否启用 API 鉴权，默认 `true` | 否 |
+| `API_AUTH_SECRET` | JWT 签名密钥，生产环境必须改成强随机值 | 是 |
+| `API_TOKEN_EXPIRE_MINUTES` | 登录 Token 过期时间 | 否 |
+| `API_ADMIN_USERNAME` / `API_ADMIN_PASSWORD` | 启动时自动创建或确保存在的管理员账号 | 是 |
+| `API_SEED_DEMO_USERS` | 是否插入 `researcher`、`kb_manager`、`viewer` 模拟用户 | 否 |
+| `API_RATE_LIMIT_REQUESTS` | 限流窗口内允许的请求数 | 否 |
+| `API_RATE_LIMIT_WINDOW_SECONDS` | 限流窗口秒数 | 否 |
 | `TAVILY_API_KEY` | 互联网搜索 | 使用联网搜索时 |
 | `MYSQL_HOST` / `MYSQL_PORT` | MySQL 地址 | 使用数据库工具时 |
 | `MYSQL_USER` / `MYSQL_PASSWORD` | MySQL 凭据 | 使用数据库工具时 |
@@ -198,6 +212,38 @@ npm run dev
 ```
 
 前端默认地址：`http://127.0.0.1:5173`
+
+首次打开前端时需要登录。服务启动时会在 MySQL 中自动创建 RBAC 表，并根据 `.env` 的 `API_ADMIN_USERNAME` 和 `API_ADMIN_PASSWORD` 初始化管理员账号；如果 `API_SEED_DEMO_USERS=true`，还会插入 `researcher`、`kb_manager`、`viewer` 三个模拟用户。登录成功后前端会把 Bearer Token 保存到 `localStorage`，普通 REST 请求放在 `Authorization` 头里，WebSocket 连接通过查询参数携带 token。
+
+RBAC 数据表：
+
+| 表名 | 作用 |
+| --- | --- |
+| `agent_rbac_users` | 用户和密码哈希 |
+| `agent_rbac_roles` | 角色定义 |
+| `agent_rbac_permissions` | 权限 scope 定义 |
+| `agent_rbac_user_roles` | 用户和角色关系 |
+| `agent_rbac_role_permissions` | 角色和权限关系 |
+
+默认模拟账号：
+
+| 用户名 | 默认密码 | 角色 |
+| --- | --- | --- |
+| `.env:API_ADMIN_USERNAME` | `.env:API_ADMIN_PASSWORD` | `admin` |
+| `researcher` | `researcher123456` | `researcher` |
+| `kb_manager` | `kb123456` | `knowledge_manager` |
+| `viewer` | `viewer123456` | `viewer` |
+
+当前内置权限 scope：
+
+| Scope | 控制范围 |
+| --- | --- |
+| `task` | 运行智能体任务 |
+| `files` | 上传、下载和查看会话文件 |
+| `ragflow` | 查看知识库、上传/解析/删除知识库文档 |
+| `conversations` | 创建会话和读取聊天记录 |
+
+登录后可以访问 `GET /api/auth/rbac` 查看当前用户、角色、权限的种子数据快照，便于本地调试。
 
 ## 内置 Skills
 
@@ -243,9 +289,9 @@ npm run build
 
 ## 当前边界
 
-- 当前项目以本地单用户开发和能力展示为主，API 尚未加入登录、权限与限流。
 - CORS 配置适合本地调试，不建议直接暴露到公网。
 - SQLite Checkpointer 适合本地 Agent 检查点；多实例部署时应迁移到 Postgres 或 Redis 等共享 Checkpointer。
-- MySQL 当前保存聊天正文但尚未加入用户账号字段；接入登录后应增加 `user_id` 并按用户校验会话访问权限。
+- 当前限流为单进程内存实现；多实例部署时应迁移到 Redis 限流。
+- MySQL 当前保存聊天正文但尚未加入用户账号字段；正式多用户版本应增加 `user_id` 并按用户校验会话访问权限。
 - RAGFlow、MySQL、Tavily 等外部能力需要单独部署或申请对应服务。
 - `ragflow/` 下的本地知识库原始资料默认被 Git 忽略，请根据数据授权自行准备测试文件。

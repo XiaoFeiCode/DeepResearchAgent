@@ -2,7 +2,7 @@
 import { nextTick, ref, watch } from 'vue'
 import { marked } from 'marked'
 
-import type { AgentStatus, Message } from '../types'
+import type { AgentStatus, FileItem, Message } from '../types'
 import { formatTime, getFileTag } from '../utils/formatters'
 import ExecutionProcess from './ExecutionProcess.vue'
 
@@ -21,6 +21,7 @@ const emit = defineEmits<{
   'file-change': [event: Event]
   'remove-file': [index: number]
   'use-prompt': [prompt: string]
+  'download-file': [file: FileItem]
 }>()
 
 const fileInputRef = ref<HTMLInputElement | null>(null)
@@ -77,10 +78,10 @@ watch(
             />
             <div class="message-bubble ai-bubble markdown-body" v-html="renderMarkdown(message.content)"></div>
             <div v-if="message.files?.length" class="result-files">
-              <a v-for="file in message.files" :key="file.name" :href="file.url" target="_blank" :download="file.name">
+              <button v-for="file in message.files" :key="file.name" type="button" @click="emit('download-file', file)">
                 <span>{{ getFileTag(file.name) }}</span>
                 <strong>{{ file.name }}</strong>
-              </a>
+              </button>
             </div>
           </div>
         </div>

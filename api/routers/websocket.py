@@ -1,6 +1,7 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from api.monitor import manager
+from api.security import require_websocket_token
 
 router = APIRouter(tags=["websocket"])
 
@@ -8,6 +9,8 @@ router = APIRouter(tags=["websocket"])
 @router.websocket("/ws/{thread_id}")
 async def websocket_endpoint(websocket: WebSocket, thread_id: str):
     """建立会话级 WebSocket 连接并维持心跳。"""
+    if not await require_websocket_token(websocket):
+        return
     await manager.connect(websocket, thread_id)
     try:
         while True:

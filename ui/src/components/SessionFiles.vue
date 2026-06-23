@@ -3,6 +3,10 @@ import type { FileItem } from '../types'
 import { formatBytes, getFileTag } from '../utils/formatters'
 
 defineProps<{ files: FileItem[] }>()
+
+const emit = defineEmits<{
+  download: [file: FileItem]
+}>()
 </script>
 
 <template>
@@ -12,13 +16,13 @@ defineProps<{ files: FileItem[] }>()
       <p>还没有生成文件</p>
     </div>
     <div v-else class="drawer-files">
-      <a v-for="file in files" :key="file.path" :href="file.url" target="_blank" :download="file.name" class="drawer-file">
+      <button v-for="file in files" :key="file.path" type="button" class="drawer-file" @click="emit('download', file)">
         <span class="file-tag">{{ getFileTag(file.name) }}</span>
         <div>
           <strong>{{ file.name }}</strong>
           <small>{{ formatBytes(file.size) }}</small>
         </div>
-      </a>
+      </button>
     </div>
   </div>
 </template>
