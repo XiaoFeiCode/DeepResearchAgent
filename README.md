@@ -63,6 +63,7 @@ RAGFlow 中配置的知识库与专业助手可以被项目中的 RAGFlow 子智
 ## 核心能力
 
 - **多智能体路由**：主智能体根据任务类型选择数据库、RAGFlow 或互联网搜索助手。
+- **异步子智能体**：支持 DeepAgents 原生 `AsyncSubAgent`，可在本地 Agent Server 中启动、查询、更新、取消多个后台研究任务。
 - **结构化数据查询**：通过 SQLModel/SQLAlchemy 查询 MySQL，并限制 Agent 只执行只读查询。
 - **企业知识库管理**：支持列出知识库、查看文档、上传并解析文档、重新解析和删除文档。
 - **RAGFlow 助手问答**：自动获取助手列表，选择合适的专业助手并发起提问。
@@ -75,9 +76,11 @@ RAGFlow 中配置的知识库与专业助手可以被项目中的 RAGFlow 子智
 - **API 安全控制**：基于 MySQL RBAC 实现用户、角色、权限管理，提供登录换取 Bearer Token、OAuth2 Scope 校验、WebSocket Token 校验和单进程内存限流。
 - **可控服务生命周期**：FastAPI `lifespan` 统一初始化共享服务，关闭时取消并等待 Agent 与 WebSocket 后台任务，随后释放 Redis、Daytona 和事件循环资源。
 - **原生 Agent Skill**：通过 DeepAgents `skills=` 与 `SkillsMiddleware` 按需发现和读取 `SKILL.md`，并为主 Agent、数据库、RAGFlow 和网络子 Agent 隔离不同 Skill。
+- **用户 Skill 安装**：用户可在聊天中提供 GitHub Skill 地址，将通过校验的 Skill 按用户隔离并分配给主 Agent 或指定领域子 Agent。
 
 ## 核心亮点
 - 🧩 多智能体架构：基于 LangGraph / DeepAgents 实现主智能体 + 子智能体协同调度
+- ⏳ 后台任务编排：原生支持异步子智能体的启动、状态查询、任务更新和取消
 - 🔀 Agentic RAG：支持基于任务的动态路由（SQL / RAG / Web）
 - 🗂 多源数据融合：MySQL + RAGFlow + Tavily 联合检索
 - 🧠 智能任务拆解：主智能体自动规划执行步骤并调用工具链
@@ -98,6 +101,10 @@ flowchart LR
     TOKEN --> AUTH[登录鉴权与 RBAC]
     AUTH --> API
     API --> MAIN[主智能体]
+    UI -.->|Agent Protocol| ASYNC[异步 Supervisor]
+    ASYNC -->|ASGI 后台任务| AWEB[网络研究 Graph]
+    ASYNC -->|ASGI 后台任务| ARAG[RAGFlow 研究 Graph]
+    ASYNC -->|ASGI 后台任务| ADB[数据库研究 Graph]
     API --> HISTORY[(MySQL 会话记录)]
     MAIN --> DB[数据库查询助手]
     MAIN --> RAG[RAGFlow 助手]
@@ -118,6 +125,7 @@ flowchart LR
 ```text
 deep_agent_project/
 ├── agent/                 # 主智能体、模型和子智能体配置
+│   └── async_graphs.py    # 异步 Supervisor 与后台子智能体 Graph
 ├── agent_memory/          # Milvus 用户级长期记忆
 ├── api/
 │   ├── routers/           # 任务、文件、RAGFlow 与 WebSocket 路由
@@ -135,6 +143,7 @@ deep_agent_project/
 │   ├── document/          # Markdown 和 PDF 生成工具
 │   ├── file/              # 本地文件读取工具
 │   ├── ragflow/           # RAGFlow 知识库和助手工具
+│   ├── skill/             # 外部 Skill 下载、校验和分配工具
 │   └── search/            # Tavily 互联网搜索工具
 ├── ui/src/
 │   ├── components/        # 聊天、执行过程、会话文件与知识库组件
@@ -146,6 +155,7 @@ deep_agent_project/
 ├── imgs_display/          # README 功能截图
 ├── deploy/memory/         # Redis Stack 与 Milvus Docker Compose
 ├── deploy/vllm/           # Embedding 与 Reranker vLLM Docker Compose
+├── langgraph.json         # 本地 Agent Server Graph 注册
 ├── pyproject.toml         # Python 直接依赖
 └── uv.lock                # 可复现的 Python 依赖锁文件
 ```
@@ -164,6 +174,7 @@ deep_agent_project/
 - RAGFlow，可选；知识库功能需要
 - Tavily API Key，可选；联网搜索功能需要
 - OpenAI 兼容的模型服务
+- LangGraph 本地 Agent Server；仅在使用异步子智能体时需要
 - Microsoft Word，可选；当前 Markdown 转 PDF 工具使用 Word COM，仅支持 Windows
 
 ## 快速开始
@@ -217,6 +228,8 @@ Copy-Item .env.example .env
 | `MYSQL_DATABASE` | MySQL 数据库名 | 使用数据库工具时 |
 | `RAGFLOW_API_URL` | RAGFlow API 地址 | 使用知识库时 |
 | `RAGFLOW_API_KEY` | RAGFlow API Key | 使用知识库时 |
+| `SKILL_ALLOW_EXECUTABLE_FILES` | 是否允许外部 Skill 携带可执行脚本，默认 `false` | 否 |
+| `GITHUB_TOKEN` | GitHub API Token，用于提高外部 Skill 下载限额 | 否 |
 
 不要提交真实的 `.env` 文件。
 
@@ -264,7 +277,29 @@ uv run api/server.py
 
 后端默认地址：`http://127.0.0.1:8000`
 
-### 4. 启动前端
+### 4. 启动异步子智能体（可选）
+
+项目使用 DeepAgents 原生 `AsyncSubAgent`。`langgraph.json` 将异步 Supervisor、网络研究、RAGFlow 研究和数据库研究注册在同一个本地 Agent Server 中，因此子智能体通过进程内 ASGI 传输运行，不需要配置或购买远程部署 URL。
+
+```powershell
+uv run langgraph dev --no-browser --n-jobs-per-worker 10
+```
+
+默认服务地址：`http://127.0.0.1:2024`，主 Graph ID 为 `async-supervisor`。
+
+异步 Supervisor 会获得以下原生工具：
+
+| 工具 | 作用 |
+| --- | --- |
+| `start_async_task` | 启动后台子智能体并立即返回完整 `task_id` |
+| `check_async_task` | 查询指定任务的实时状态和结果 |
+| `update_async_task` | 向运行中的任务追加或修改要求 |
+| `cancel_async_task` | 取消指定后台任务 |
+| `list_async_tasks` | 列出当前线程跟踪的异步任务 |
+
+异步模式适合多轮检索、长报告和可中途调整的研究任务；普通 FastAPI 工作台仍保留同步子智能体路径，适合需要在一次请求中直接得到结果的任务。
+
+### 5. 启动前端
 
 新开一个 PowerShell 窗口：
 
@@ -321,6 +356,35 @@ RBAC 数据表：
 
 Skill 是智能体的任务说明和决策流程，Tool 是真正执行数据库查询、上传文档或互联网搜索的代码。项目使用 DeepAgents 原生渐进式披露机制：Agent 初始只看到 Skill 的名称、描述和路径，任务匹配后才读取完整 `SKILL.md`。主 Agent 使用路由和文档 Skill；数据库、RAGFlow、网络子 Agent 分别只加载各自的执行 Skill。Daytona 启动会把这些 Skill 同步到隔离的远端来源目录。
 
+### 从 GitHub 安装用户 Skill
+
+用户可以直接在聊天窗口提供 Skill 地址和目标智能体，例如：
+
+```text
+请安装这个 Skill：
+https://github.com/example/agent-skills/tree/main/skills/legal-research
+分配给 internet 子智能体。
+```
+
+主 Agent 会调用 `install_agent_skill`，支持 GitHub 仓库根目录、Skill 文件夹、`SKILL.md` 文件以及 `raw.githubusercontent.com` 地址。可分配目标为：
+
+| `target_agent` | 接收 Skill 的智能体 |
+| --- | --- |
+| `main` | 主智能体 |
+| `database` | 数据库查询子智能体 |
+| `ragflow` | RAGFlow 子智能体 |
+| `internet` | 网络搜索子智能体 |
+
+外部 Skill 保存在 `runtime/installed_skills/`，按登录用户哈希和目标智能体隔离，并同步到对应会话的 Daytona Skill 来源目录。安装后，对应子智能体的新任务会通过 `SkillsMiddleware` 自动发现该 Skill。
+
+安全限制：
+
+- 只接受 HTTPS GitHub 地址。
+- 必须存在带有合法 `name` 和 `description` 的 `SKILL.md`。
+- 最多 50 个文件、单文件 1 MB、总大小 5 MB。
+- 不允许覆盖项目内置 Skill。
+- 默认拒绝 Python、Shell、PowerShell、JavaScript 和可执行文件；只有可信环境才应启用 `SKILL_ALLOW_EXECUTABLE_FILES=true`。
+
 ## 使用示例
 
 可以在前端输入：
@@ -346,6 +410,7 @@ uv lock --check
 uv sync --locked
 uv pip check
 uv run python -m compileall -q agent agent_memory api ragflow skills tools utils
+uv run python -m unittest discover -s tests -v
 
 cd ui
 npm run build

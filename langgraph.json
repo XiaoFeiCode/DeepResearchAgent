@@ -1,0 +1,12 @@
+{
+  "dependencies": [
+    "."
+  ],
+  "graphs": {
+    "async-supervisor": "./agent/async_graphs.py:async_supervisor_graph",
+    "internet-researcher": "./agent/async_graphs.py:internet_research_graph",
+    "ragflow-researcher": "./agent/async_graphs.py:ragflow_research_graph",
+    "database-researcher": "./agent/async_graphs.py:database_research_graph"
+  },
+  "env": ".env"
+}

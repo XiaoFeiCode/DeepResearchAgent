@@ -6,6 +6,7 @@ from agent.subagents.internet_sub_agent import internet_sub_agent
 from tools.document import convert_md_to_pdf, generate_markdown
 from tools.file import read_file_content
 from tools.memory import recall_long_term_memory, save_long_term_memory
+from tools.skill import install_agent_skill, list_agent_skills
 
 from deepagents import create_deep_agent
 
@@ -40,7 +41,14 @@ subagents_list = [
     internet_sub_agent
 ]
 
-main_system_prompt = main_agent_config["system_prompt"]
+main_system_prompt = main_agent_config["system_prompt"] + """
+
+【外部 Skill 安装规则】
+1. 只有用户明确提供 Skill 地址并要求安装时，才能调用 install_agent_skill。
+2. 安装前根据用户要求选择 main、database、ragflow 或 internet 目标智能体。
+3. 不得擅自启用外部 Skill 中的可执行脚本，也不得绕过下载与安全校验。
+4. 安装成功后再委派给对应子智能体；需要确认现有分配时调用 list_agent_skills。
+"""
 
 # SQLite checkpointer 会把同一个 thread_id 下的 Agent 状态保存下来。
 # 用户连续追问时沿用同一个 thread_id；点击“新会话”时前端会生成新的 thread_id。
@@ -81,6 +89,8 @@ async def get_main_agent():
                 read_file_content,
                 recall_long_term_memory,
                 save_long_term_memory,
+                install_agent_skill,
+                list_agent_skills,
             ],
             system_prompt=main_system_prompt,
             checkpointer=checkpoint_saver,

@@ -14,7 +14,14 @@ from deepagents.backends.protocol import BackendProtocol
 from dotenv import find_dotenv, load_dotenv
 from langchain.tools import ToolRuntime
 from langchain_daytona import DaytonaSandbox
-from skills.registry import REMOTE_SKILLS_ROOT, SKILL_ASSIGNMENTS
+from api.context import get_user_context
+from skills.registry import (
+    INSTALLED_SKILLS_ROOT,
+    REMOTE_SKILLS_ROOT,
+    SKILL_ASSIGNMENTS,
+    SKILL_TARGETS,
+    user_skill_storage_key,
+)
 
 load_dotenv(find_dotenv())
 
@@ -64,27 +71,20 @@ class DaytonaSandboxManager:
                 self._get_client().delete(sandbox)
                 raise RuntimeError(f"Failed to initialize Daytona workspace: {init_result.output}")
 
-            self._upload_project_skills(backend)
+            self._upload_project_skills(
+                backend,
+                user_id=get_user_context() or "anonymous",
+            )
             self._sandboxes[thread_id] = sandbox
             self._backends[thread_id] = backend
             return backend
 
-    def _upload_project_skills(self, backend: DaytonaSandbox) -> None:
-        """Copy project skills into the remote backend for native discovery."""
-        local_root = Path(__file__).resolve().parent.parent / "skills"
-        uploads: list[tuple[Path, str]] = []
-        for group, skill_names in SKILL_ASSIGNMENTS.items():
-            for skill_name in skill_names:
-                skill_dir = local_root / skill_name
-                for path in skill_dir.rglob("*"):
-                    if not path.is_file():
-                        continue
-                    relative_path = path.relative_to(skill_dir).as_posix()
-                    remote_path = (
-                        f"{REMOTE_SKILLS_ROOT}/{group}/{skill_name}/{relative_path}"
-                    )
-                    uploads.append((path, remote_path))
-
+    @staticmethod
+    def _upload_skill_files(
+        backend: DaytonaSandbox,
+        uploads: list[tuple[Path, str]],
+    ) -> None:
+        """Upload prepared skill files while preserving their directory structure."""
         if not uploads:
             return
 
@@ -105,7 +105,78 @@ class DaytonaSandboxManager:
         errors = [response for response in responses if response.error]
         if errors:
             details = ", ".join(f"{item.path}: {item.error}" for item in errors)
-            raise RuntimeError(f"Failed to upload project skills to Daytona: {details}")
+            raise RuntimeError(f"Failed to upload skill files: {details}")
+
+    def _upload_project_skills(self, backend: DaytonaSandbox, user_id: str) -> None:
+        """Copy built-in and user-installed skills into the remote backend."""
+        local_root = Path(__file__).resolve().parent.parent / "skills"
+        uploads: list[tuple[Path, str]] = []
+        for group, skill_names in SKILL_ASSIGNMENTS.items():
+            for skill_name in skill_names:
+                skill_dir = local_root / skill_name
+                for path in skill_dir.rglob("*"):
+                    if not path.is_file():
+                        continue
+                    relative_path = path.relative_to(skill_dir).as_posix()
+                    remote_path = (
+                        f"{REMOTE_SKILLS_ROOT}/{group}/{skill_name}/{relative_path}"
+                    )
+                    uploads.append((path, remote_path))
+
+        user_root = INSTALLED_SKILLS_ROOT / user_skill_storage_key(user_id)
+        for target_agent in SKILL_TARGETS:
+            target_root = user_root / target_agent
+            if not target_root.exists():
+                continue
+            for skill_dir in target_root.iterdir():
+                if not skill_dir.is_dir():
+                    continue
+                for path in skill_dir.rglob("*"):
+                    if path.is_file():
+                        relative_path = path.relative_to(skill_dir).as_posix()
+                        uploads.append(
+                            (
+                                path,
+                                f"{REMOTE_SKILLS_ROOT}/{target_agent}/"
+                                f"{skill_dir.name}/{relative_path}",
+                            )
+                        )
+
+        self._upload_skill_files(backend, uploads)
+
+    def upload_user_skill(
+        self,
+        *,
+        thread_id: str,
+        user_id: str,
+        target_agent: str,
+        skill_name: str,
+        local_directory: str,
+    ) -> None:
+        """Sync one newly installed user skill into the active conversation sandbox."""
+        if target_agent not in SKILL_TARGETS:
+            raise ValueError(f"Unknown skill target: {target_agent}")
+
+        expected = (
+            INSTALLED_SKILLS_ROOT
+            / user_skill_storage_key(user_id)
+            / target_agent
+            / skill_name
+        ).resolve()
+        local_root = Path(local_directory).resolve()
+        if local_root != expected or not local_root.is_dir():
+            raise ValueError("Installed skill path is outside the expected user directory")
+
+        uploads = [
+            (
+                path,
+                f"{REMOTE_SKILLS_ROOT}/{target_agent}/{skill_name}/"
+                f"{path.relative_to(local_root).as_posix()}",
+            )
+            for path in local_root.rglob("*")
+            if path.is_file()
+        ]
+        self._upload_skill_files(self.get_backend(thread_id), uploads)
 
     def backend_for_runtime(self, runtime: ToolRuntime[Any, Any]) -> BackendProtocol:
         """Resolve the current thread's backend for DeepAgents tools."""
