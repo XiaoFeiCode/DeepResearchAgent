@@ -14,7 +14,7 @@ class TaskService:
 
     def __init__(
         self,
-        runner: Callable[[str, str], Awaitable[object]] = run_deep_agent,
+        runner: Callable[[str, str, str], Awaitable[object]] = run_deep_agent,
         conversation_service: ConversationService | None = None,
     ) -> None:
         self._runner = runner
@@ -25,19 +25,24 @@ class TaskService:
     def active_count(self) -> int:
         return len(self._tasks)
 
-    def start(self, query: str, thread_id: str | None = None) -> str:
+    def start(
+        self,
+        query: str,
+        thread_id: str | None = None,
+        user_id: str = "anonymous",
+    ) -> str:
         task_thread_id = thread_id or str(uuid.uuid4())
         task = asyncio.create_task(
-            self._run_and_persist(query, task_thread_id),
+            self._run_and_persist(query, task_thread_id, user_id),
             name=f"agent-task-{task_thread_id}",
         )
         self._tasks.add(task)
         task.add_done_callback(self._on_task_done)
         return task_thread_id
 
-    async def _run_and_persist(self, query: str, thread_id: str):
+    async def _run_and_persist(self, query: str, thread_id: str, user_id: str):
         await self._save_message(thread_id, "user", query)
-        result = await self._runner(query, thread_id)
+        result = await self._runner(query, thread_id, user_id)
         if isinstance(result, str) and result and result != "Done":
             role = "system" if result.startswith("Error:") else "assistant"
             await self._save_message(thread_id, role, result)

@@ -1,5 +1,6 @@
 from agent.load_prompt import sub_agent_configs
 from tools.database import execute_sql_query, get_table_data, list_sql_tables
+from skills.registry import DATABASE_AGENT_SKILLS
 
 
 database_query_agent = {
@@ -7,6 +8,7 @@ database_query_agent = {
     "description": sub_agent_configs["db"]["description"],
     "system_prompt": sub_agent_configs["db"]["system_prompt"],
     "tools": [list_sql_tables, get_table_data, execute_sql_query],
+    "skills": DATABASE_AGENT_SKILLS,
     # model 默认使用主智能体的模型配置，如果需要单独配置，可以在这里添加 model 字段
 }
 

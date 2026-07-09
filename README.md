@@ -7,6 +7,9 @@
 [![DeepAgents](https://img.shields.io/badge/DeepAgents-Orchestration-EA580C?style=flat-square)](https://github.com/langchain-ai/deepagents)
 [![MySQL](https://img.shields.io/badge/MySQL-Database-4479A1?style=flat-square&logo=mysql&logoColor=white)](https://www.mysql.com/)
 [![RAGFlow](https://img.shields.io/badge/RAGFlow-Knowledge%20Base-00A6A6?style=flat-square)](https://github.com/infiniflow/ragflow)
+[![vLLM](https://img.shields.io/badge/vLLM-Inference-111827?style=flat-square)](https://github.com/vllm-project/vllm)
+[![Milvus](https://img.shields.io/badge/Milvus-Vector%20Memory-00A1EA?style=flat-square)](https://milvus.io/)
+[![Redis](https://img.shields.io/badge/Redis-Checkpoint-DC382D?style=flat-square&logo=redis&logoColor=white)](https://redis.io/)
 [![uv](https://img.shields.io/badge/uv-Managed-DE5FE9?style=flat-square&logo=astral&logoColor=white)](https://docs.astral.sh/uv/)
 
 一个融合 Multi-Agent + Agentic RAG + 工具调用编排 + 实时可视化执行过程的企业级 AI 搜索与知识系统。
@@ -66,11 +69,12 @@ RAGFlow 中配置的知识库与专业助手可以被项目中的 RAGFlow 子智
 - **互联网搜索**：通过 Tavily 检索公开资料，并在回答中保留原始来源链接。
 - **文件分析**：读取 Markdown、TXT、Word、PDF 和 Excel 文件。
 - **文档生成**：生成 Markdown，并可在 Windows + Microsoft Word 环境中转换为 PDF。
-- **双层会话记忆**：LangGraph SQLite Checkpointer 保存 Agent 执行上下文，MySQL 保存前端可恢复的会话与消息记录。
+- **全生命周期记忆**：Redis Checkpointer 保存线程消息、任务计划和执行断点；Milvus 保存跨会话的偏好、规则、策略、模板和历史结论；MySQL 保存前端可恢复的聊天记录。
+- **vLLM 检索推理服务**：Embedding 与 Reranker 解耦为独立 vLLM Pooling 服务，形成“向量化 → Milvus Top-K 召回 → Cross-Encoder 重排 → Top-N 上下文注入”链路。
 - **实时执行过程**：FastAPI WebSocket 向前端推送子智能体调用、工具调用和最终结果。
 - **API 安全控制**：基于 MySQL RBAC 实现用户、角色、权限管理，提供登录换取 Bearer Token、OAuth2 Scope 校验、WebSocket Token 校验和单进程内存限流。
-- **可控服务生命周期**：FastAPI `lifespan` 统一初始化共享服务，关闭时取消并等待 Agent 与 WebSocket 后台任务，随后释放 SQLite、连接和事件循环资源。
-- **项目 Skill**：通过 `skills/*/SKILL.md` 为智能体注入领域路由和操作流程。
+- **可控服务生命周期**：FastAPI `lifespan` 统一初始化共享服务，关闭时取消并等待 Agent 与 WebSocket 后台任务，随后释放 Redis、Daytona 和事件循环资源。
+- **原生 Agent Skill**：通过 DeepAgents `skills=` 与 `SkillsMiddleware` 按需发现和读取 `SKILL.md`，并为主 Agent、数据库、RAGFlow 和网络子 Agent 隔离不同 Skill。
 
 ## 核心亮点
 - 🧩 多智能体架构：基于 LangGraph / DeepAgents 实现主智能体 + 子智能体协同调度
@@ -80,7 +84,8 @@ RAGFlow 中配置的知识库与专业助手可以被项目中的 RAGFlow 子智
 - 📡 实时流式输出：通过 WebSocket 展示 Agent 思考与执行过程
 - 📚 企业级知识库：集成 RAGFlow 实现文档检索与问答
 - 🧾 结构化生成：支持 Markdown 报告自动生成与导出
-- 💾 会话记忆：SQLite 管理 Agent 检查点，MySQL 持久化聊天记录，实现 thread 级隔离和刷新恢复
+- 💾 分层记忆：Redis 管理线程检查点，Milvus 管理用户级长期经验，MySQL 持久化前端聊天记录
+- ⚡ 推理服务化：通过 vLLM 独立部署 BGE Embedding 与 Reranker，支持 OpenAI Embeddings API 和 Cohere Rerank API
 - 🔐 API 鉴权：基于 MySQL RBAC、Bearer Token 与 Scope 控制任务、文件、知识库和会话接口访问
 
 ## 系统架构
@@ -101,7 +106,11 @@ flowchart LR
     DB --> MYSQL[(MySQL 业务数据)]
     RAG --> RF[(RAGFlow)]
     WEB --> TAVILY[Tavily]
-    MAIN --> MEMORY[(SQLite Checkpoint)]
+    MAIN --> SHORT[(Redis Checkpoint)]
+    MAIN --> EMBED[vLLM Embedding]
+    EMBED --> LONG[(Milvus Long-term Memory)]
+    LONG --> RERANK[vLLM Reranker]
+    RERANK --> MAIN
 ```
 
 ## 项目结构
@@ -109,6 +118,7 @@ flowchart LR
 ```text
 deep_agent_project/
 ├── agent/                 # 主智能体、模型和子智能体配置
+├── agent_memory/          # Milvus 用户级长期记忆
 ├── api/
 │   ├── routers/           # 任务、文件、RAGFlow 与 WebSocket 路由
 │   ├── schemas/           # Pydantic 请求模型
@@ -121,6 +131,7 @@ deep_agent_project/
 ├── skills/                # 项目内置 SKILL.md 工作流
 ├── tools/
 │   ├── database/          # MySQL/SQLModel 查询工具
+│   ├── memory/            # 长期记忆检索与保存工具
 │   ├── document/          # Markdown 和 PDF 生成工具
 │   ├── file/              # 本地文件读取工具
 │   ├── ragflow/           # RAGFlow 知识库和助手工具
@@ -133,6 +144,8 @@ deep_agent_project/
 │   └── App.vue            # 页面状态与组件编排
 ├── utils/                 # 路径与文档转换辅助模块
 ├── imgs_display/          # README 功能截图
+├── deploy/memory/         # Redis Stack 与 Milvus Docker Compose
+├── deploy/vllm/           # Embedding 与 Reranker vLLM Docker Compose
 ├── pyproject.toml         # Python 直接依赖
 └── uv.lock                # 可复现的 Python 依赖锁文件
 ```
@@ -147,6 +160,7 @@ deep_agent_project/
 - [uv](https://docs.astral.sh/uv/)
 - Node.js 20+
 - MySQL，可选；数据库查询和聊天记录持久化需要，未配置时聊天记录功能会降级
+- Docker；Redis Checkpointer 和 Milvus 长期记忆默认通过 Compose 运行
 - RAGFlow，可选；知识库功能需要
 - Tavily API Key，可选；联网搜索功能需要
 - OpenAI 兼容的模型服务
@@ -175,6 +189,21 @@ Copy-Item .env.example .env
 | `OPENAI_BASE_URL` | OpenAI 兼容接口地址 | 是 |
 | `OPENAI_API_KEY` | 模型服务 API Key | 是 |
 | `LLM_MODEL` | 接口实际支持的模型名 | 是 |
+| `REDIS_CHECKPOINT_URL` | Redis Stack Checkpointer 地址 | 是 |
+| `REDIS_CHECKPOINT_TTL_MINUTES` | 不活跃线程状态的保留时间 | 否 |
+| `MILVUS_URI` | Milvus 服务地址 | 是 |
+| `MILVUS_MEMORY_COLLECTION` | 长期记忆 Collection 名称 | 否 |
+| `MEMORY_MIN_SIMILARITY` | 长期记忆召回最低相似度 | 否 |
+| `MEMORY_EMBEDDING_PROVIDER` | 长期记忆向量服务，默认 `vllm` | 否 |
+| `MEMORY_RERANKER_ENABLED` | 是否启用 vLLM Reranker | 否 |
+| `VLLM_EMBEDDING_BASE_URL` | vLLM OpenAI Embeddings API 地址 | 是 |
+| `VLLM_EMBEDDING_MODEL` | Embedding 模型名称 | 是 |
+| `VLLM_RERANKER_BASE_URL` | vLLM Cohere Rerank API 地址 | 是 |
+| `VLLM_RERANKER_MODEL` | Reranker 模型名称 | 是 |
+| `DAYTONA_API_KEY` | Daytona 云沙箱 API Key | 是 |
+| `DAYTONA_API_URL` | Daytona API 地址，默认 `https://app.daytona.io/api` | 否 |
+| `DAYTONA_TARGET` | 沙箱区域；留空时使用组织默认区域 | 否 |
+| `DAYTONA_COMMAND_TIMEOUT_SECONDS` | 沙箱命令最大执行时间 | 否 |
 | `API_AUTH_ENABLED` | 是否启用 API 鉴权，默认 `true` | 否 |
 | `API_AUTH_SECRET` | JWT 签名密钥，生产环境必须改成强随机值 | 是 |
 | `API_TOKEN_EXPIRE_MINUTES` | 登录 Token 过期时间 | 否 |
@@ -190,6 +219,40 @@ Copy-Item .env.example .env
 | `RAGFLOW_API_KEY` | RAGFlow API Key | 使用知识库时 |
 
 不要提交真实的 `.env` 文件。
+
+### 启动记忆服务
+
+```powershell
+docker compose -p deep-agent-memory -f deploy/memory/docker-compose.yml up -d
+```
+
+默认端口：
+
+- Redis Stack：`127.0.0.1:6380`
+- Milvus：`127.0.0.1:19531`
+- Milvus WebUI：`http://127.0.0.1:9092/webui/`
+
+### 启动 vLLM 检索模型
+
+项目使用两个独立的 vLLM Pooling 服务：
+
+- `BAAI/bge-small-zh-v1.5`：通过 OpenAI 兼容的 `/v1/embeddings` 接口生成 512 维向量。
+- `BAAI/bge-reranker-base`：通过 Cohere 兼容的 `/v1/rerank` 接口对 Milvus 候选结果重排。
+
+```powershell
+docker compose -p deep-agent-vllm -f deploy/vllm/docker-compose.yml up -d
+```
+
+默认服务地址：
+
+- Embedding：`http://127.0.0.1:8001/v1`
+- Reranker：`http://127.0.0.1:8002/v1`
+
+检索流程首先从 Milvus 召回扩大后的候选集合，再调用 Reranker 计算 Query-Document 相关性分数并截取 Top-N。可以通过 `.env` 替换为其他 vLLM Pooling 模型或远程 GPU 服务；`MEMORY_ALLOW_HASH_FALLBACK=true` 可在推理服务不可用时启用本地降级。
+
+### Daytona 沙箱
+
+DeepAgents 的文件操作与 `execute` 命令默认运行在 Daytona 云沙箱中，而不是后端宿主机。同一个 `thread_id` 会复用同一个沙箱，不同会话相互隔离。用户上传的文件会在任务开始前同步到 `/home/daytona/workspace`，任务结束后生成文件会同步回本地会话目录。FastAPI 服务关闭时会删除本进程创建的沙箱，避免远端资源继续计费。
 
 ### 3. 启动后端
 
@@ -254,8 +317,9 @@ RBAC 数据表：
 | `ragflow-knowledge-base` | 管理知识库、文档和 RAGFlow 助手问答流程 |
 | `web-research` | 处理公开互联网信息并保留来源链接 |
 | `document-generation` | 生成 Markdown/PDF 文档 |
+| `long-term-memory` | 跨会话召回或保存用户偏好、规则、策略、模板和历史结论 |
 
-Skill 是智能体的任务说明和决策流程，Tool 是真正执行数据库查询、上传文档或互联网搜索的代码。
+Skill 是智能体的任务说明和决策流程，Tool 是真正执行数据库查询、上传文档或互联网搜索的代码。项目使用 DeepAgents 原生渐进式披露机制：Agent 初始只看到 Skill 的名称、描述和路径，任务匹配后才读取完整 `SKILL.md`。主 Agent 使用路由和文档 Skill；数据库、RAGFlow、网络子 Agent 分别只加载各自的执行 Skill。Daytona 启动会把这些 Skill 同步到隔离的远端来源目录。
 
 ## 使用示例
 
@@ -273,7 +337,7 @@ Skill 是智能体的任务说明和决策流程，Tool 是真正执行数据库
 搜索 LangGraph 的最新资料，并给出原始来源链接
 ```
 
-同一标签页中的追问会复用当前 `thread_id`。前端将该 ID 保存在 `sessionStorage`，刷新页面后会从 MySQL 的 `agent_conversations` 和 `agent_messages` 表恢复聊天记录；LangGraph SQLite Checkpointer 则继续负责恢复 Agent 内部执行上下文。点击“新会话”会生成新的 `thread_id`，适合开始一个无关任务。关闭标签页后再次打开也会生成新会话，不会自动带入旧上下文。
+同一标签页中的追问会复用当前 `thread_id`。前端将该 ID 保存在 `sessionStorage`，刷新页面后会从 MySQL 恢复聊天记录，Redis Checkpointer 负责恢复 Agent 内部状态、任务计划和执行断点。点击“新会话”会生成新的 `thread_id`；新会话不会继承旧线程的原始聊天，但会按登录用户名从 Milvus 召回相关长期偏好、规则和历史结论。
 
 ## 开发验证
 
@@ -281,7 +345,7 @@ Skill 是智能体的任务说明和决策流程，Tool 是真正执行数据库
 uv lock --check
 uv sync --locked
 uv pip check
-uv run python -m compileall -q agent api ragflow skills tools utils
+uv run python -m compileall -q agent agent_memory api ragflow skills tools utils
 
 cd ui
 npm run build
@@ -290,7 +354,7 @@ npm run build
 ## 当前边界
 
 - CORS 配置适合本地调试，不建议直接暴露到公网。
-- SQLite Checkpointer 适合本地 Agent 检查点；多实例部署时应迁移到 Postgres 或 Redis 等共享 Checkpointer。
+- vLLM 模型服务需要 NVIDIA GPU 和足够显存，也可以通过环境变量连接独立 GPU 服务器。
 - 当前限流为单进程内存实现；多实例部署时应迁移到 Redis 限流。
 - MySQL 当前保存聊天正文但尚未加入用户账号字段；正式多用户版本应增加 `user_id` 并按用户校验会话访问权限。
 - RAGFlow、MySQL、Tavily 等外部能力需要单独部署或申请对应服务。

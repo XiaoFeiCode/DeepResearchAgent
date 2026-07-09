@@ -1,0 +1,73 @@
+services:
+  embedding:
+    image: vllm/vllm-openai:latest
+    container_name: deep-agent-vllm-embedding
+    restart: unless-stopped
+    ipc: host
+    ports:
+      - "8001:8000"
+    volumes:
+      - huggingface_cache:/root/.cache/huggingface
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+      HF_ENDPOINT: ${HF_ENDPOINT:-https://huggingface.co}
+    command:
+      - --model
+      - ${VLLM_EMBEDDING_MODEL:-BAAI/bge-small-zh-v1.5}
+      - --served-model-name
+      - ${VLLM_EMBEDDING_MODEL:-BAAI/bge-small-zh-v1.5}
+      - --runner
+      - pooling
+      - --dtype
+      - half
+      - --max-model-len
+      - "512"
+      - --gpu-memory-utilization
+      - ${VLLM_EMBEDDING_GPU_MEMORY_UTILIZATION:-0.35}
+      - --api-key
+      - ${VLLM_EMBEDDING_API_KEY:-local-vllm}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  reranker:
+    image: vllm/vllm-openai:latest
+    container_name: deep-agent-vllm-reranker
+    restart: unless-stopped
+    ipc: host
+    ports:
+      - "8002:8000"
+    volumes:
+      - huggingface_cache:/root/.cache/huggingface
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+      HF_ENDPOINT: ${HF_ENDPOINT:-https://huggingface.co}
+    command:
+      - --model
+      - ${VLLM_RERANKER_MODEL:-BAAI/bge-reranker-base}
+      - --served-model-name
+      - ${VLLM_RERANKER_MODEL:-BAAI/bge-reranker-base}
+      - --runner
+      - pooling
+      - --dtype
+      - half
+      - --max-model-len
+      - "512"
+      - --gpu-memory-utilization
+      - ${VLLM_RERANKER_GPU_MEMORY_UTILIZATION:-0.35}
+      - --api-key
+      - ${VLLM_RERANKER_API_KEY:-local-vllm}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+volumes:
+  huggingface_cache:

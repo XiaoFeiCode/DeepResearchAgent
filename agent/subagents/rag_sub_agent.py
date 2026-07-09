@@ -11,6 +11,7 @@ from tools.ragflow import (
     setup_ragflow_knowledge_base,
     upload_ragflow_documents,
 )
+from skills.registry import RAGFLOW_AGENT_SKILLS
 
 ragflow_config = sub_agent_configs["ragflow"]
 
@@ -31,6 +32,7 @@ rag_sub_agent = {
         inspect_ragflow_knowledge_base,
         setup_ragflow_knowledge_base,
     ],
+    "skills": RAGFLOW_AGENT_SKILLS,
 }
 
 # 这个包对外只暴露 rag_sub_agent，其他子智能体在各自模块中定义。

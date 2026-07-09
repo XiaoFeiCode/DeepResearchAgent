@@ -45,7 +45,12 @@ def resolve_path(filename: str, session_dir: Optional[str] = None) -> str:
     path_str = filename.replace("\\", "/")  # 统一处理字符串匹配
 
     # 1. 虚拟路径清洗
-    virtual_prefixes = ["/workspace", "/mnt/data", "/home/user"]
+    virtual_prefixes = [
+        "/home/daytona/workspace",
+        "/workspace",
+        "/mnt/data",
+        "/home/user",
+    ]
     for prefix in virtual_prefixes:
         if path_str.startswith(prefix):
             # 去掉前缀

@@ -5,22 +5,30 @@ from agent.subagents.internet_sub_agent import internet_sub_agent
 # main_agent tool导入
 from tools.document import convert_md_to_pdf, generate_markdown
 from tools.file import read_file_content
+from tools.memory import recall_long_term_memory, save_long_term_memory
 
 from deepagents import create_deep_agent
 
 from agent.llm import model
 from agent.load_prompt import main_agent_config
-from skills.loader import load_project_skills
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from agent.sandbox import REMOTE_WORKSPACE, daytona_sandbox_manager
+from skills.registry import MAIN_AGENT_SKILLS
+from langgraph.checkpoint.redis.aio import AsyncRedisSaver
 
 from api.monitor import monitor
-import aiosqlite
+from agent_memory import long_term_memory
 import asyncio
+import os
 import uuid
 import shutil
 from pathlib import Path
 
-from api.context import set_session_context, reset_session_context, set_thread_context
+from api.context import (
+    reset_session_context,
+    set_session_context,
+    set_thread_context,
+    set_user_context,
+)
 
 from langchain_core.messages import AIMessage
 
@@ -32,26 +40,22 @@ subagents_list = [
     internet_sub_agent
 ]
 
-project_skills_prompt = load_project_skills()
 main_system_prompt = main_agent_config["system_prompt"]
-if project_skills_prompt:
-    main_system_prompt = f"{main_system_prompt}\n\n{project_skills_prompt}"
 
 # SQLite checkpointer 会把同一个 thread_id 下的 Agent 状态保存下来。
 # 用户连续追问时沿用同一个 thread_id；点击“新会话”时前端会生成新的 thread_id。
 project_root = Path(__file__).resolve().parent.parent
 runtime_dir = project_root / "runtime"
 runtime_dir.mkdir(exist_ok=True)
-checkpoint_path = runtime_dir / "agent_checkpoints.sqlite"
 main_agent = None
-checkpoint_conn = None
+checkpoint_context = None
 checkpoint_saver = None
 main_agent_lock = asyncio.Lock()
 
 
 async def get_main_agent():
     """异步初始化主智能体，确保 astream 使用异步版 SQLite checkpointer。"""
-    global main_agent, checkpoint_conn, checkpoint_saver
+    global main_agent, checkpoint_context, checkpoint_saver
 
     if main_agent is not None:
         return main_agent
@@ -60,24 +64,41 @@ async def get_main_agent():
         if main_agent is not None:
             return main_agent
 
-        checkpoint_conn = await aiosqlite.connect(checkpoint_path)
-        checkpoint_saver = AsyncSqliteSaver(checkpoint_conn)
+        redis_url = os.getenv("REDIS_CHECKPOINT_URL", "redis://127.0.0.1:6380")
+        ttl_minutes = int(os.getenv("REDIS_CHECKPOINT_TTL_MINUTES", "10080"))
+        checkpoint_context = AsyncRedisSaver.from_conn_string(
+            redis_url,
+            ttl={"default_ttl": ttl_minutes, "refresh_on_read": True},
+        )
+        checkpoint_saver = await checkpoint_context.__aenter__()
+        await checkpoint_saver.setup()
         main_agent = create_deep_agent(
             model=model,
             subagents=subagents_list,
-            tools=[generate_markdown, convert_md_to_pdf, read_file_content],
+            tools=[
+                generate_markdown,
+                convert_md_to_pdf,
+                read_file_content,
+                recall_long_term_memory,
+                save_long_term_memory,
+            ],
             system_prompt=main_system_prompt,
             checkpointer=checkpoint_saver,
+            backend=daytona_sandbox_manager.backend_for_runtime,
+            skills=MAIN_AGENT_SKILLS,
         )
         return main_agent
 
 
 async def close_main_agent_resources():
     """服务关闭时释放异步 SQLite 连接。"""
-    global checkpoint_conn
-    if checkpoint_conn is not None:
-        await checkpoint_conn.close()
-        checkpoint_conn = None
+    global main_agent, checkpoint_context, checkpoint_saver
+    if checkpoint_context is not None:
+        await checkpoint_context.__aexit__(None, None, None)
+        checkpoint_context = None
+        checkpoint_saver = None
+        main_agent = None
+    await asyncio.to_thread(daytona_sandbox_manager.close)
 
 
 # 异步执行主智能体的函数，供API调用
@@ -176,7 +197,11 @@ def _process_stream_chunk(chunk):
 
 
 # ====================== 核心执行逻辑 ======================
-async def run_deep_agent(task_query: str, thread_id: str = None):
+async def run_deep_agent(
+    task_query: str,
+    thread_id: str | None = None,
+    user_id: str = "anonymous",
+):
     """
     DeepAgents 核心执行入口 (Agent Execution Runtime)。
 
@@ -204,6 +229,7 @@ async def run_deep_agent(task_query: str, thread_id: str = None):
     # 3. [上下文绑定] 初始化 ContextVars (关键：隔离并发请求)
     thread_token = set_thread_context(thread_id)
     session_token = set_session_context(session_dir_str)
+    user_token = set_user_context(user_id)
     # 给前端推送文件夹，方便后续查询当前会话对应文件夹下的所有文件
     monitor.report_session_dir(session_dir_str)
 
@@ -212,6 +238,7 @@ async def run_deep_agent(task_query: str, thread_id: str = None):
         "configurable": {"thread_id": thread_id},  # 用于 MemorySaver 记忆上下文
     }
     # 5. [提示词构建] 动态注入环境约束
+    memory_instruction = ""
     path_instruction = f"""
     【工作环境指令】
     工作目录: {relative_session_dir}
@@ -225,11 +252,48 @@ async def run_deep_agent(task_query: str, thread_id: str = None):
 
     # 6. [流式执行] 启动 Agent 循环
     try:
+        try:
+            memories = await asyncio.to_thread(
+                long_term_memory.search,
+                user_id=user_id,
+                query=task_query,
+                limit=5,
+            )
+            if memories:
+                memory_lines = [
+                    f"- [{item['memory_type']}] {item['content']}"
+                    for item in memories
+                ]
+                memory_instruction = (
+                    "\n\n【相关长期记忆】\n"
+                    + "\n".join(memory_lines)
+                    + "\n这些记忆仅作为历史上下文；若与当前要求冲突，以当前要求为准。"
+                )
+        except Exception as memory_error:
+            print(f"Long-term memory recall unavailable: {memory_error}")
+
+        await asyncio.to_thread(
+            daytona_sandbox_manager.upload_workspace,
+            thread_id,
+            Path(session_dir_str),
+        )
         agent = await get_main_agent()
         # astream: 异步生成器，像流水线一样逐个吐出 Agent 的思考片段
         final_result = None
         async for chunk in agent.astream(
-                {"messages": [{"role": "user", "content": task_query + path_instruction}]},
+                {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": task_query
+                            + path_instruction
+                            + memory_instruction
+                            + f"\nDaytona 沙箱工作目录是 {REMOTE_WORKSPACE}。"
+                            + "代码、命令、上传文件和临时文件必须在该目录中处理；"
+                            + f"使用绝对路径，例如 {REMOTE_WORKSPACE}/report.md。",
+                        }
+                    ]
+                },
                 config=config
         ):
             # 实时处理每一个片段 (上报前端)
@@ -243,6 +307,14 @@ async def run_deep_agent(task_query: str, thread_id: str = None):
         monitor._emit("error", f"Execution failed: {e}")
         return f"Error: {e}"
     finally:
+        try:
+            await asyncio.to_thread(
+                daytona_sandbox_manager.download_workspace,
+                thread_id,
+                Path(session_dir_str),
+            )
+        except Exception as sync_error:
+            print(f"Failed to sync Daytona workspace: {sync_error}")
         # 8. [资源清理] 必须重置 ContextVars，防止线程池复用导致的上下文污染
         if 'session_token' in locals():
-            reset_session_context(session_token, thread_token)
+            reset_session_context(session_token, thread_token, user_token)
