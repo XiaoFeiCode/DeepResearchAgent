@@ -1,10 +1,10 @@
 import asyncio
 
-from fastapi import APIRouter, File, Form, Request, Security, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, Security, UploadFile
 from fastapi.responses import FileResponse
 
-from api.security import check_rbac
-from api.services import FileService
+from api.security import AuthenticatedUser, check_rbac
+from api.services import ConversationAccessError, ConversationService, FileService
 
 router = APIRouter(prefix="/api", tags=["files"])
 
@@ -22,6 +22,31 @@ async def upload_files(
 ):
     saved_files = await asyncio.to_thread(_service(request).save_uploads, files, thread_id)
     return {"status": "uploaded", "files": saved_files}
+
+
+@router.get("/uploads/{thread_id}/{filename}")
+async def get_uploaded_file(
+    thread_id: str,
+    filename: str,
+    request: Request,
+    current_user: AuthenticatedUser = Security(check_rbac, scopes=["files"]),
+):
+    """Return a persisted chat attachment after verifying conversation ownership."""
+    conversation_service: ConversationService = request.app.state.conversation_service
+    if not conversation_service.available:
+        raise HTTPException(status_code=503, detail="会话存储不可用")
+    try:
+        await asyncio.to_thread(
+            conversation_service.list_messages,
+            thread_id,
+            current_user.username,
+        )
+        file_path = _service(request).resolve_upload(thread_id, filename)
+        return FileResponse(file_path, filename=file_path.name)
+    except ConversationAccessError as error:
+        raise HTTPException(status_code=404, detail="附件不存在") from error
+    except (FileNotFoundError, PermissionError, ValueError) as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
 
 
 @router.get("/download")

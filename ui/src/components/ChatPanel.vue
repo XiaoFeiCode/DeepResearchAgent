@@ -173,9 +173,34 @@ onBeforeUnmount(() => {
   <section v-else class="chat-scroll-area">
     <div class="chat-list">
       <article v-for="(message, index) in messages" :key="index" class="message" :class="message.role">
-        <div v-if="message.role === 'user'" class="message-bubble user-bubble">
-          <time>{{ formatTime(message.timestamp) }}</time>
-          <p>{{ message.content }}</p>
+        <div v-if="message.role === 'user'" class="user-message-content">
+          <div v-if="message.attachments?.length" class="user-message-attachments">
+            <a
+              v-for="attachment in message.attachments.filter((item) => item.content_type.startsWith('image/'))"
+              :key="attachment.content_url"
+              :href="attachment.previewUrl"
+              class="user-image-attachment"
+              :class="{ loading: !attachment.previewUrl }"
+              target="_blank"
+              rel="noreferrer"
+              :aria-label="`查看图片：${attachment.name}`"
+            >
+              <img v-if="attachment.previewUrl" :src="attachment.previewUrl" :alt="attachment.name" />
+              <span v-else>图片加载中...</span>
+            </a>
+            <div
+              v-for="attachment in message.attachments.filter((item) => !item.content_type.startsWith('image/'))"
+              :key="attachment.content_url"
+              class="user-file-attachment"
+            >
+              <span>{{ getFileTag(attachment.name) }}</span>
+              <strong>{{ attachment.name }}</strong>
+            </div>
+          </div>
+          <div class="message-bubble user-bubble">
+            <time>{{ formatTime(message.timestamp) }}</time>
+            <p>{{ message.content }}</p>
+          </div>
         </div>
 
         <div v-else-if="message.role === 'ai'" class="assistant-message">

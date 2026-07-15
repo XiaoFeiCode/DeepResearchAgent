@@ -22,7 +22,16 @@ export interface Message {
   logs?: LogItem[]
   files?: FileItem[]
   images?: ImageKnowledgeItem[]
+  attachments?: MessageAttachment[]
   timestamp?: number
+}
+
+export interface MessageAttachment {
+  name: string
+  content_type: string
+  size: number
+  content_url: string
+  previewUrl?: string
 }
 
 export interface ConversationSummary {

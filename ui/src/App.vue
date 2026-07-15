@@ -12,6 +12,7 @@ import type {
   FileItem,
   ImageKnowledgeItem,
   Message,
+  MessageAttachment,
   RagflowDataset,
   RagflowDocument,
 } from './types'
@@ -99,6 +100,35 @@ const hydrateImageItem = async (image: ImageKnowledgeItem): Promise<ImageKnowled
 
 const hydrateImageItems = (images: ImageKnowledgeItem[]) => Promise.all(images.map(hydrateImageItem))
 
+const attachmentCacheKey = (attachment: MessageAttachment) => `attachment:${attachment.content_url}`
+
+const hydrateAttachmentItem = async (
+  attachment: MessageAttachment,
+): Promise<MessageAttachment> => {
+  if (!attachment.content_type.startsWith('image/') || !attachment.content_url.startsWith('/api/')) {
+    return attachment
+  }
+  const cacheKey = attachmentCacheKey(attachment)
+  const cachedUrl = imageObjectUrls.get(cacheKey)
+  if (cachedUrl) return { ...attachment, previewUrl: cachedUrl }
+
+  try {
+    const response = await axios.get(`${API_BASE}${attachment.content_url}`, {
+      responseType: 'blob',
+    })
+    const previewUrl = URL.createObjectURL(response.data)
+    imageObjectUrls.set(cacheKey, previewUrl)
+    return { ...attachment, previewUrl }
+  } catch (error) {
+    console.error(`Failed to load attachment preview: ${attachment.name}`, error)
+    return attachment
+  }
+}
+
+const hydrateAttachmentItems = (attachments: MessageAttachment[]) => (
+  Promise.all(attachments.map(hydrateAttachmentItem))
+)
+
 const clearAuthState = () => {
   authToken.value = ''
   authUser.value = ''
@@ -182,11 +212,15 @@ const fetchConversationMessages = async (threadId = currentThreadId.value) => {
       role: message.role === 'assistant' ? 'ai' : message.role,
       content: message.content,
       images: message.metadata?.images ?? [],
+      attachments: message.metadata?.attachments ?? [],
       timestamp: message.timestamp,
     }))
     await Promise.all(
       messages.value.map(async (message) => {
         if (message.images?.length) message.images = await hydrateImageItems(message.images)
+        if (message.attachments?.length) {
+          message.attachments = await hydrateAttachmentItems(message.attachments)
+        }
       }),
     )
   } catch (error: any) {
@@ -585,8 +619,27 @@ const connectWebSocket = () => {
   socket.value = websocket
 }
 
-const uploadSelectedFiles = async (aiMessage: Message) => {
-  if (selectedFiles.value.length === 0) return
+const createPendingAttachments = (files: File[]): MessageAttachment[] => files.map((file) => {
+  const contentUrl = `pending:${crypto.randomUUID()}`
+  const attachment: MessageAttachment = {
+    name: file.name,
+    content_type: file.type || 'application/octet-stream',
+    size: file.size,
+    content_url: contentUrl,
+  }
+  if (file.type.startsWith('image/')) {
+    const previewUrl = URL.createObjectURL(file)
+    imageObjectUrls.set(attachmentCacheKey(attachment), previewUrl)
+    attachment.previewUrl = previewUrl
+  }
+  return attachment
+})
+
+const uploadSelectedFiles = async (
+  aiMessage: Message,
+  pendingAttachments: MessageAttachment[],
+): Promise<MessageAttachment[]> => {
+  if (selectedFiles.value.length === 0) return []
   aiMessage.logs ??= []
   aiMessage.logs.push({
     type: 'info',
@@ -598,11 +651,29 @@ const uploadSelectedFiles = async (aiMessage: Message) => {
   const formData = new FormData()
   formData.append('thread_id', currentThreadId.value)
   selectedFiles.value.forEach((file) => formData.append('files', file))
-  await axios.post(`${API_BASE}/api/upload`, formData, {
+  const response = await axios.post(`${API_BASE}/api/upload`, formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
+  })
+  const attachments = (response.data.files ?? []).map((item: any, index: number) => {
+    const pending = pendingAttachments[index]
+    const attachment: MessageAttachment = typeof item === 'string'
+      ? {
+          name: item,
+          content_type: pending?.content_type || 'application/octet-stream',
+          size: pending?.size || 0,
+          content_url: `/api/uploads/${encodeURIComponent(currentThreadId.value)}/${encodeURIComponent(item)}`,
+        }
+      : item
+    if (pending?.previewUrl) {
+      imageObjectUrls.delete(attachmentCacheKey(pending))
+      imageObjectUrls.set(attachmentCacheKey(attachment), pending.previewUrl)
+      attachment.previewUrl = pending.previewUrl
+    }
+    return attachment
   })
   selectedFiles.value = []
   aiMessage.logs.push({ type: 'success', title: '文件上传完成', details: null, timestamp: new Date().toLocaleTimeString() })
+  return attachments
 }
 
 const sendMessage = async () => {
@@ -610,13 +681,25 @@ const sendMessage = async () => {
   const query = inputQuery.value.trim() || '请分析我上传的文件'
   inputQuery.value = ''
   status.value = 'running'
-  messages.value.push({ role: 'user', content: query, timestamp: Date.now() })
+  const pendingAttachments = createPendingAttachments([...selectedFiles.value])
+  const userMessage: Message = {
+    role: 'user',
+    content: query,
+    attachments: pendingAttachments,
+    timestamp: Date.now(),
+  }
+  messages.value.push(userMessage)
 
   const aiMessage: Message = { role: 'ai', content: '', logs: [], files: [], timestamp: Date.now() }
   messages.value.push(aiMessage)
   try {
-    await uploadSelectedFiles(aiMessage)
-    const response = await axios.post(`${API_BASE}/api/task`, { query, thread_id: currentThreadId.value })
+    const attachments = await uploadSelectedFiles(aiMessage, pendingAttachments)
+    userMessage.attachments = attachments
+    const response = await axios.post(`${API_BASE}/api/task`, {
+      query,
+      thread_id: currentThreadId.value,
+      attachment_names: attachments.map((attachment) => attachment.name),
+    })
     if (response.data?.thread_id) {
       currentThreadId.value = response.data.thread_id
       sessionStorage.setItem(THREAD_STORAGE_KEY, currentThreadId.value)

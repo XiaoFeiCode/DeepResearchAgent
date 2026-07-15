@@ -31,6 +31,7 @@ class TaskService:
         query: str,
         thread_id: str | None = None,
         user_id: str = "anonymous",
+        user_metadata: dict | None = None,
     ) -> str:
         task_thread_id = thread_id or str(uuid.uuid4())
         service = self._conversation_service
@@ -41,15 +42,32 @@ class TaskService:
                 user_id,
             )
         task = asyncio.create_task(
-            self._run_and_persist(query, task_thread_id, user_id),
+            self._run_and_persist(
+                query,
+                task_thread_id,
+                user_id,
+                user_metadata,
+            ),
             name=f"agent-task-{task_thread_id}",
         )
         self._tasks.add(task)
         task.add_done_callback(self._on_task_done)
         return task_thread_id
 
-    async def _run_and_persist(self, query: str, thread_id: str, user_id: str):
-        await self._save_message(thread_id, user_id, "user", query)
+    async def _run_and_persist(
+        self,
+        query: str,
+        thread_id: str,
+        user_id: str,
+        user_metadata: dict | None = None,
+    ):
+        await self._save_message(
+            thread_id,
+            user_id,
+            "user",
+            query,
+            metadata=user_metadata,
+        )
         result = await self._runner(query, thread_id, user_id)
         content = result.content if isinstance(result, AgentRunResult) else result
         metadata = result.metadata if isinstance(result, AgentRunResult) else None

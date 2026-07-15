@@ -78,6 +78,44 @@ class TaskServiceTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
+    async def test_persists_user_attachments(self):
+        conversation_service = FakeConversationService()
+
+        async def runner(query, thread_id, user_id):
+            return "已分析图片"
+
+        attachments = [
+            {
+                "name": "photo.png",
+                "content_type": "image/png",
+                "size": 128,
+                "content_url": "/api/uploads/thread-photo/photo.png",
+            }
+        ]
+        service = TaskService(
+            runner=runner,
+            conversation_service=conversation_service,
+        )
+        await service.start(
+            "分析这张图",
+            "thread-photo",
+            user_id="alice",
+            user_metadata={"attachments": attachments},
+        )
+        while service.active_count:
+            await asyncio.sleep(0.01)
+
+        self.assertEqual(
+            conversation_service.messages[0],
+            (
+                "thread-photo",
+                "alice",
+                "user",
+                "分析这张图",
+                {"attachments": attachments},
+            ),
+        )
+
     async def test_rejects_a_thread_owned_by_another_user_before_running(self):
         class DeniedConversationService(FakeConversationService):
             def create_conversation(self, thread_id, user_id, title=None):
