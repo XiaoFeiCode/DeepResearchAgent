@@ -3,6 +3,7 @@ import unittest
 
 from api.services.conversation_service import ConversationAccessError
 from api.services.task_service import TaskService
+from agent.result import AgentRunResult
 
 
 class FakeConversationService:
@@ -17,7 +18,7 @@ class FakeConversationService:
         return {"id": thread_id}
 
     def add_message(self, thread_id, user_id, role, content, metadata=None):
-        self.messages.append((thread_id, user_id, role, content))
+        self.messages.append((thread_id, user_id, role, content, metadata))
         return {"id": len(self.messages)}
 
 
@@ -44,9 +45,37 @@ class TaskServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             conversation_service.messages,
             [
-                ("thread-1", "alice", "user", "question"),
-                ("thread-1", "alice", "assistant", "answer for alice"),
+                ("thread-1", "alice", "user", "question", None),
+                ("thread-1", "alice", "assistant", "answer for alice", None),
             ],
+        )
+
+    async def test_persists_structured_image_results(self):
+        conversation_service = FakeConversationService()
+
+        async def runner(query, thread_id, user_id):
+            return AgentRunResult(
+                content="找到一张相似图片",
+                metadata={"images": [{"id": "image-1", "score": 0.91}]},
+            )
+
+        service = TaskService(
+            runner=runner,
+            conversation_service=conversation_service,
+        )
+        await service.start("查找相似图片", "thread-images", user_id="alice")
+        while service.active_count:
+            await asyncio.sleep(0.01)
+
+        self.assertEqual(
+            conversation_service.messages[-1],
+            (
+                "thread-images",
+                "alice",
+                "assistant",
+                "找到一张相似图片",
+                {"images": [{"id": "image-1", "score": 0.91}]},
+            ),
         )
 
     async def test_rejects_a_thread_owned_by_another_user_before_running(self):

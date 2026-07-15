@@ -1,12 +1,22 @@
 <script setup lang="ts">
-import type { AgentStatus, LogItem } from '../types'
-import { normalizeTitle } from '../utils/formatters'
+import type { AgentStatus, ConversationSummary } from '../types'
 
 defineProps<{
   status: AgentStatus
   threadId: string
   fileCount: number
-  logs: LogItem[]
+  conversations: ConversationSummary[]
+  userName: string
+}>()
+
+const emit = defineEmits<{
+  'new-chat': []
+  'open-files': []
+  'open-knowledge': []
+  'open-images': []
+  'select-conversation': [threadId: string]
+  'delete-conversation': [conversation: ConversationSummary]
+  logout: []
 }>()
 </script>
 
@@ -19,38 +29,72 @@ defineProps<{
         </svg>
       </div>
       <div>
-        <p>Deep Agent</p>
-        <strong>多智能体深度搜索</strong>
+        <strong>DeepAgent</strong>
       </div>
     </div>
 
-    <div class="status-board">
-      <div class="status-row">
-        <span>运行状态</span>
-        <strong :class="status">{{ status === 'running' ? '执行中' : '待命' }}</strong>
-      </div>
-      <div class="status-row">
-        <span>会话</span>
-        <strong>{{ threadId.slice(0, 8) }}</strong>
-      </div>
-      <div class="status-row">
-        <span>文件</span>
-        <strong>{{ fileCount }}</strong>
-      </div>
-    </div>
+    <button class="rail-new-chat" type="button" :disabled="status === 'running'" @click="emit('new-chat')">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+      新对话
+    </button>
 
-    <div class="activity-panel">
-      <div class="panel-title">最近动作</div>
-      <div v-if="logs.length === 0" class="empty-state">等待任务开始</div>
-      <div v-else class="activity-list">
-        <div v-for="(log, index) in logs" :key="`${log.timestamp}-${index}`" class="activity-item">
-          <span class="activity-dot" :class="log.type"></span>
-          <div>
-            <strong>{{ normalizeTitle(log.title) }}</strong>
-            <time>{{ log.timestamp }}</time>
-          </div>
+    <nav class="rail-nav" aria-label="工作区">
+      <button type="button" @click="emit('open-files')">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h4l2 2h5A2.5 2.5 0 0 1 20 7.5v9A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5v-11Z" /></svg>
+        会话文件
+        <span>{{ fileCount }}</span>
+      </button>
+      <button type="button" @click="emit('open-knowledge')">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h12a2 2 0 0 1 2 2v14H7a2 2 0 0 1-2-2V4Zm2 0v16M10 8h6M10 12h6" /></svg>
+        知识库
+      </button>
+      <button type="button" @click="emit('open-images')">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4V5Zm3 11 3-3 2 2 2.5-3 2.5 4M9 9h.01" /></svg>
+        图库
+      </button>
+    </nav>
+
+    <section class="conversation-history" aria-label="会话列表">
+      <div class="panel-title">会话</div>
+      <div v-if="conversations.length === 0" class="empty-state">暂无会话</div>
+      <div v-else class="conversation-list">
+        <div
+          v-for="conversation in conversations"
+          :key="conversation.id"
+          class="conversation-item"
+          :class="{ active: conversation.id === threadId }"
+        >
+          <button
+            class="conversation-select"
+            type="button"
+            :disabled="status === 'running' && conversation.id !== threadId"
+            :title="conversation.title"
+            @click="emit('select-conversation', conversation.id)"
+          >
+            <span>{{ conversation.title || '新会话' }}</span>
+          </button>
+          <button
+            class="conversation-delete"
+            type="button"
+            :disabled="status === 'running'"
+            :title="`删除会话：${conversation.title}`"
+            :aria-label="`删除会话：${conversation.title}`"
+            @click="emit('delete-conversation', conversation)"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5" />
+            </svg>
+          </button>
         </div>
       </div>
+    </section>
+
+    <div class="rail-account">
+      <span>{{ userName.slice(0, 1).toUpperCase() }}</span>
+      <strong>{{ userName }}</strong>
+      <button type="button" title="退出登录" aria-label="退出登录" @click="emit('logout')">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H5v14h5M14 8l4 4-4 4M8 12h10" /></svg>
+      </button>
     </div>
   </aside>
 </template>

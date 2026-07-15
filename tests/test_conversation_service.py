@@ -42,6 +42,11 @@ class ConversationServiceTests(unittest.TestCase):
                     service.create_conversation("thread-1", "bob")
                 with self.assertRaises(ConversationAccessError):
                     service.add_message("thread-1", "bob", "user", "unauthorized")
+
+                service.delete_conversation("thread-1", "alice")
+                self.assertEqual(service.list_conversations("alice"), [])
+                with self.assertRaises(ConversationAccessError):
+                    service.list_messages("thread-1", "alice")
             finally:
                 service._engine.dispose()
 

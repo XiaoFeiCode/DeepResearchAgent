@@ -1,4 +1,4 @@
-"""Embedding and reranking clients for vLLM pooling services."""
+"""Embedding and reranking clients for cloud APIs and local vLLM services."""
 
 from __future__ import annotations
 
@@ -9,6 +9,16 @@ import re
 from typing import Any
 
 import httpx
+
+
+def _required_api_key(*names: str) -> str:
+    """Return the first configured API key without duplicating secrets in .env."""
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
+    joined = ", ".join(names)
+    raise ValueError(f"Missing API key. Configure one of: {joined}")
 
 
 class HashEmbedding:
@@ -120,13 +130,112 @@ class VLLMRerankerClient:
         return reranked
 
 
+class APIEmbeddingClient:
+    """OpenAI-compatible cloud embedding client, defaulting to Alibaba Bailian."""
+
+    def __init__(self, dimension: int) -> None:
+        self.base_url = os.getenv(
+            "MEMORY_EMBEDDING_BASE_URL",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        ).rstrip("/")
+        self.model = os.getenv("MEMORY_EMBEDDING_MODEL", "text-embedding-v4")
+        self.dimension = dimension
+        self.timeout = float(os.getenv("MEMORY_INFERENCE_TIMEOUT_SECONDS", "30"))
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        api_key = _required_api_key(
+            "MEMORY_EMBEDDING_API_KEY",
+            "DASHSCOPE_API_KEY",
+            "VISION_API_KEY",
+        )
+        response = httpx.post(
+            f"{self.base_url}/embeddings",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={
+                "model": self.model,
+                "input": texts,
+                "dimensions": self.dimension,
+                "encoding_format": "float",
+            },
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+        data = sorted(response.json()["data"], key=lambda item: item["index"])
+        return [item["embedding"] for item in data]
+
+
+class APIRerankerClient:
+    """Alibaba Bailian text rerank API client."""
+
+    def __init__(self) -> None:
+        self.endpoint = os.getenv(
+            "MEMORY_RERANKER_ENDPOINT",
+            (
+                "https://dashscope.aliyuncs.com/api/v1/services/rerank/"
+                "text-rerank/text-rerank"
+            ),
+        )
+        self.model = os.getenv("MEMORY_RERANKER_MODEL", "gte-rerank-v2")
+        self.timeout = float(os.getenv("MEMORY_INFERENCE_TIMEOUT_SECONDS", "30"))
+
+    def rerank(
+        self,
+        *,
+        query: str,
+        candidates: list[dict[str, Any]],
+        top_n: int,
+    ) -> list[dict[str, Any]]:
+        if not candidates:
+            return []
+
+        api_key = _required_api_key(
+            "MEMORY_RERANKER_API_KEY",
+            "DASHSCOPE_API_KEY",
+            "VISION_API_KEY",
+        )
+        response = httpx.post(
+            self.endpoint,
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={
+                "model": self.model,
+                "input": {
+                    "query": query,
+                    "documents": [item["content"] for item in candidates],
+                },
+                "parameters": {
+                    "return_documents": False,
+                    "top_n": min(top_n, len(candidates)),
+                },
+            },
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+
+        reranked: list[dict[str, Any]] = []
+        for result in response.json().get("output", {}).get("results", []):
+            index = int(result["index"])
+            if not 0 <= index < len(candidates):
+                continue
+            item = dict(candidates[index])
+            item["rerank_score"] = round(
+                float(result.get("relevance_score", result.get("score", 0.0))),
+                4,
+            )
+            reranked.append(item)
+        return reranked
+
+
 class MemoryInference:
-    """Select vLLM inference with explicit local fallback."""
+    """Select cloud API, vLLM, or hash inference through environment settings."""
 
     def __init__(self, dimension: int) -> None:
         self.embedding_provider = os.getenv(
             "MEMORY_EMBEDDING_PROVIDER",
-            "vllm",
+            "api",
+        ).lower()
+        self.reranker_provider = os.getenv(
+            "MEMORY_RERANKER_PROVIDER",
+            self.embedding_provider,
         ).lower()
         self.reranker_enabled = os.getenv(
             "MEMORY_RERANKER_ENABLED",
@@ -137,17 +246,26 @@ class MemoryInference:
             "false",
         ).lower() not in {"0", "false", "no", "off"}
         self._hash = HashEmbedding(dimension)
+        self._api_embedding = APIEmbeddingClient(dimension)
+        self._api_reranker = APIRerankerClient()
         self._vllm_embedding = VLLMEmbeddingClient()
         self._vllm_reranker = VLLMRerankerClient()
 
     def embed(self, texts: list[str]) -> list[list[float]]:
-        if self.embedding_provider != "vllm":
-            return self._hash.embed(texts)
         try:
-            vectors = self._vllm_embedding.embed(texts)
+            if self.embedding_provider == "api":
+                vectors = self._api_embedding.embed(texts)
+            elif self.embedding_provider == "vllm":
+                vectors = self._vllm_embedding.embed(texts)
+            elif self.embedding_provider == "hash":
+                vectors = self._hash.embed(texts)
+            else:
+                raise ValueError(
+                    "MEMORY_EMBEDDING_PROVIDER must be api, vllm, or hash"
+                )
             if any(len(vector) != self._hash.dimension for vector in vectors):
                 raise ValueError(
-                    "vLLM embedding dimension does not match MEMORY_VECTOR_DIMENSION"
+                    "Embedding dimension does not match MEMORY_VECTOR_DIMENSION"
                 )
             return vectors
         except Exception:
@@ -165,7 +283,17 @@ class MemoryInference:
         if not self.reranker_enabled:
             return candidates[:top_n]
         try:
-            reranked = self._vllm_reranker.rerank(
+            if self.reranker_provider == "api":
+                client = self._api_reranker
+            elif self.reranker_provider == "vllm":
+                client = self._vllm_reranker
+            elif self.reranker_provider in {"none", "off", "disabled"}:
+                return candidates[:top_n]
+            else:
+                raise ValueError(
+                    "MEMORY_RERANKER_PROVIDER must be api, vllm, or none"
+                )
+            reranked = client.rerank(
                 query=query,
                 candidates=candidates,
                 top_n=top_n,

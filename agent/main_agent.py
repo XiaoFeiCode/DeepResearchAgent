@@ -6,11 +6,13 @@ from agent.subagents.internet_sub_agent import internet_sub_agent
 from tools.document import convert_md_to_pdf, generate_markdown
 from tools.file import read_file_content
 from tools.memory import recall_long_term_memory, save_long_term_memory
+from tools.multimodal import analyze_image, search_image_knowledge
 from tools.skill import install_agent_skill, list_agent_skills
 
 from deepagents import create_deep_agent
 
 from agent.llm import model
+from agent.result import AgentRunResult
 from agent.load_prompt import main_agent_config
 from agent.sandbox import REMOTE_WORKSPACE, daytona_sandbox_manager
 from skills.registry import MAIN_AGENT_SKILLS
@@ -26,6 +28,8 @@ from pathlib import Path
 
 from api.context import (
     reset_session_context,
+    get_result_metadata,
+    set_result_metadata_context,
     set_session_context,
     set_thread_context,
     set_user_context,
@@ -87,6 +91,8 @@ async def get_main_agent():
                 generate_markdown,
                 convert_md_to_pdf,
                 read_file_content,
+                analyze_image,
+                search_image_knowledge,
                 recall_long_term_memory,
                 save_long_term_memory,
                 install_agent_skill,
@@ -240,6 +246,7 @@ async def run_deep_agent(
     thread_token = set_thread_context(thread_id)
     session_token = set_session_context(session_dir_str)
     user_token = set_user_context(user_id)
+    result_metadata_token = set_result_metadata_context()
     # 给前端推送文件夹，方便后续查询当前会话对应文件夹下的所有文件
     monitor.report_session_dir(session_dir_str)
 
@@ -310,12 +317,15 @@ async def run_deep_agent(
             chunk_result = _process_stream_chunk(chunk)
             if chunk_result:
                 final_result = chunk_result
-        return final_result or "Done"
+        return AgentRunResult(
+            content=final_result or "Done",
+            metadata=get_result_metadata(),
+        )
     except Exception as e:
         # 7. [异常处理] 兜底捕获
         print(f"Error: {e}")
         monitor._emit("error", f"Execution failed: {e}")
-        return f"Error: {e}"
+        return AgentRunResult(content=f"Error: {e}")
     finally:
         try:
             await asyncio.to_thread(
@@ -327,4 +337,9 @@ async def run_deep_agent(
             print(f"Failed to sync Daytona workspace: {sync_error}")
         # 8. [资源清理] 必须重置 ContextVars，防止线程池复用导致的上下文污染
         if 'session_token' in locals():
-            reset_session_context(session_token, thread_token, user_token)
+            reset_session_context(
+                session_token,
+                thread_token,
+                user_token,
+                result_metadata_token,
+            )

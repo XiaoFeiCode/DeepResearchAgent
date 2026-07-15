@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { marked } from 'marked'
 
-import type { AgentStatus, FileItem, Message } from '../types'
+import type { AgentStatus, FileItem, ImageKnowledgeItem, Message } from '../types'
 import { formatTime, getFileTag } from '../utils/formatters'
 import ExecutionProcess from './ExecutionProcess.vue'
 
@@ -12,7 +12,6 @@ const props = defineProps<{
   inputQuery: string
   selectedFiles: File[]
   canSend: boolean
-  starterPrompts: string[]
 }>()
 
 const emit = defineEmits<{
@@ -20,16 +19,110 @@ const emit = defineEmits<{
   send: []
   'file-change': [event: Event]
   'remove-file': [index: number]
-  'use-prompt': [prompt: string]
   'download-file': [file: FileItem]
 }>()
 
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const messagesEndRef = ref<HTMLElement | null>(null)
+const imagePreviewUrls = new Map<File, string>()
+
+const isPreviewableImage = (file: File) => {
+  const suffix = file.name.split('.').pop()?.toLowerCase()
+  return ['png', 'jpg', 'jpeg', 'webp'].includes(suffix || '')
+}
+
+const getImagePreviewUrl = (file: File) => {
+  const existing = imagePreviewUrls.get(file)
+  if (existing) return existing
+
+  const previewUrl = URL.createObjectURL(file)
+  imagePreviewUrls.set(file, previewUrl)
+  return previewUrl
+}
 
 const renderMarkdown = (text: string) => {
   if (!text) return '<span class="thinking-text">正在分析任务...</span>'
   return marked.parse(text)
+}
+
+const escapeHtml = (value: string) => value
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#039;')
+
+const imageFigureHtml = (image: ImageKnowledgeItem) => {
+  const title = image.document_name || image.filename || '检索图片'
+  const source = image.source === 'ragflow'
+    ? `RAGFlow 文档图片${image.page ? ` · 第 ${image.page} 页` : ''}`
+    : image.score !== undefined
+      ? `相似度 ${(image.score * 100).toFixed(1)}%`
+      : '图片知识库'
+  const media = image.previewUrl
+    ? `<a href="${escapeHtml(image.previewUrl)}" target="_blank" rel="noreferrer"><img src="${escapeHtml(image.previewUrl)}" alt="${escapeHtml(title)}" loading="lazy"></a>`
+    : '<div class="inline-image-loading">图片加载中...</div>'
+  const description = image.description
+    ? `<small>${escapeHtml(image.description)}</small>`
+    : ''
+
+  return `<figure class="inline-image-result" data-image-id="${escapeHtml(image.id)}">
+    ${media}
+    <figcaption>
+      <strong>${escapeHtml(title)}</strong>
+      <span>${escapeHtml(source)}</span>
+      ${description}
+    </figcaption>
+  </figure>`
+}
+
+const renderMessageContent = (message: Message) => {
+  if (!message.content) return '<span class="thinking-text">正在分析任务...</span>'
+  const images = message.images ?? []
+  if (!images.length) return renderMarkdown(message.content)
+
+  const referencedIds = new Set<string>()
+  const source = message.content.replace(
+    /\{\{\s*image:([^}\s]+)\s*\}\}/gi,
+    (token, imageId: string) => {
+      const image = images.find((item) => item.id === imageId)
+      if (!image) return token
+      referencedIds.add(image.id)
+      return `\n\n${imageFigureHtml(image)}\n\n`
+    },
+  )
+  const html = marked.parse(source) as string
+  const remaining = images.filter((image) => !referencedIds.has(image.id))
+  if (!remaining.length) return html
+
+  // 模型漏写图片占位符时，把图片均匀插入正文块之间，避免全部堆在答案末尾。
+  const document = new DOMParser().parseFromString(
+    `<div id="message-content-root">${html}</div>`,
+    'text/html',
+  )
+  const root = document.querySelector('#message-content-root')
+  if (!root) return html
+  const anchors = Array.from(root.children).filter((element) => (
+    !element.classList.contains('inline-image-result')
+    && ['P', 'H1', 'H2', 'H3', 'UL', 'OL', 'TABLE', 'BLOCKQUOTE'].includes(element.tagName)
+  ))
+
+  if (!anchors.length) {
+    root.insertAdjacentHTML('beforeend', remaining.map(imageFigureHtml).join(''))
+    return root.innerHTML
+  }
+
+  // 倒序插入可以保证多张图片落在同一锚点后时仍保持检索顺序。
+  for (let index = remaining.length - 1; index >= 0; index -= 1) {
+    const image = remaining[index]
+    if (!image) continue
+    const anchorIndex = Math.min(
+      anchors.length - 1,
+      Math.max(0, Math.floor(((index + 1) * anchors.length) / (remaining.length + 1))),
+    )
+    anchors[anchorIndex]?.insertAdjacentHTML('afterend', imageFigureHtml(image))
+  }
+  return root.innerHTML
 }
 
 watch(
@@ -40,19 +133,32 @@ watch(
   },
   { deep: true },
 )
+
+watch(
+  () => props.selectedFiles,
+  (files) => {
+    for (const [file, previewUrl] of imagePreviewUrls) {
+      if (!files.includes(file)) {
+        URL.revokeObjectURL(previewUrl)
+        imagePreviewUrls.delete(file)
+      }
+    }
+  },
+)
+
+onBeforeUnmount(() => {
+  for (const previewUrl of imagePreviewUrls.values()) URL.revokeObjectURL(previewUrl)
+  imagePreviewUrls.clear()
+})
 </script>
 
 <template>
   <section v-if="messages.length === 0" class="welcome-panel">
-    <div class="welcome-copy">
-      <span class="eyebrow">Ready</span>
-      <h2>今天要让哪个助手开工？</h2>
-      <p>可以查数据库、检索 RAGFlow、上传资料，也可以把结果整理成文档。</p>
-    </div>
-    <div class="prompt-grid">
-      <button v-for="prompt in starterPrompts" :key="prompt" type="button" @click="emit('use-prompt', prompt)">
-        {{ prompt }}
-      </button>
+    <div class="welcome-copy empty-chat-state">
+      <div class="empty-chat-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M12 3 14.9 9.1 21 12l-6.1 2.9L12 21l-2.9-6.1L3 12l6.1-2.9L12 3Z" /></svg>
+      </div>
+      <h2>有什么可以帮忙的？</h2>
     </div>
   </section>
 
@@ -76,7 +182,7 @@ watch(
               :logs="message.logs"
               :running="status === 'running' && index === messages.length - 1"
             />
-            <div class="message-bubble ai-bubble markdown-body" v-html="renderMarkdown(message.content)"></div>
+            <div class="message-bubble ai-bubble markdown-body" v-html="renderMessageContent(message)"></div>
             <div v-if="message.files?.length" class="result-files">
               <button v-for="file in message.files" :key="file.name" type="button" @click="emit('download-file', file)">
                 <span>{{ getFileTag(file.name) }}</span>
@@ -94,8 +200,18 @@ watch(
 
   <footer class="composer-area">
     <div v-if="selectedFiles.length" class="selected-files">
-      <div v-for="(file, index) in selectedFiles" :key="`${file.name}-${index}`" class="selected-file">
-        <span>{{ getFileTag(file.name) }}</span>
+      <div
+        v-for="(file, index) in selectedFiles"
+        :key="`${file.name}-${index}`"
+        class="selected-file"
+        :class="{ 'image-file': isPreviewableImage(file) }"
+      >
+        <img
+          v-if="isPreviewableImage(file)"
+          :src="getImagePreviewUrl(file)"
+          :alt="file.name"
+        />
+        <span v-else>{{ getFileTag(file.name) }}</span>
         <strong>{{ file.name }}</strong>
         <button type="button" aria-label="移除文件" @click="emit('remove-file', index)">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" /></svg>
@@ -104,7 +220,13 @@ watch(
     </div>
 
     <div class="composer">
-      <input ref="fileInputRef" type="file" multiple @change="emit('file-change', $event)" />
+      <input
+        ref="fileInputRef"
+        type="file"
+        multiple
+        accept=".md,.txt,.docx,.pdf,.xlsx,.xls,.png,.jpg,.jpeg,.webp"
+        @change="emit('file-change', $event)"
+      />
       <button class="icon-button" type="button" :disabled="status === 'running'" aria-label="上传文件" @click="fileInputRef?.click()">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v10m0-10 4 4m-4-4-4 4M5 19h14" /></svg>
       </button>

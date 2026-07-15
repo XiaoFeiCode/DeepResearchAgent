@@ -1,15 +1,27 @@
 <script setup lang="ts">
+import { ref, watch } from 'vue'
+
 import type { LogItem } from '../types'
 import { normalizeTitle } from '../utils/formatters'
 
-defineProps<{
+const props = defineProps<{
   logs: LogItem[]
   running: boolean
 }>()
+
+const detailsRef = ref<HTMLDetailsElement | null>(null)
+
+watch(
+  () => props.running,
+  (running) => {
+    if (detailsRef.value) detailsRef.value.open = running
+  },
+  { flush: 'post' },
+)
 </script>
 
 <template>
-  <details class="process-card" open>
+  <details ref="detailsRef" class="process-card" :open="running">
     <summary>
       <span v-if="running" class="run-pulse"></span>
       执行过程

@@ -7,6 +7,7 @@
 [![DeepAgents](https://img.shields.io/badge/DeepAgents-Orchestration-EA580C?style=flat-square)](https://github.com/langchain-ai/deepagents)
 [![MySQL](https://img.shields.io/badge/MySQL-Database-4479A1?style=flat-square&logo=mysql&logoColor=white)](https://www.mysql.com/)
 [![RAGFlow](https://img.shields.io/badge/RAGFlow-Knowledge%20Base-00A6A6?style=flat-square)](https://github.com/infiniflow/ragflow)
+[![Multimodal](https://img.shields.io/badge/Multimodal-Image%20Understanding-7C3AED?style=flat-square)](https://docs.langchain.com/oss/python/integrations/chat/openai)
 [![vLLM](https://img.shields.io/badge/vLLM-Inference-111827?style=flat-square)](https://github.com/vllm-project/vllm)
 [![Milvus](https://img.shields.io/badge/Milvus-Vector%20Memory-00A1EA?style=flat-square)](https://milvus.io/)
 [![Redis](https://img.shields.io/badge/Redis-Checkpoint-DC382D?style=flat-square&logo=redis&logoColor=white)](https://redis.io/)
@@ -67,8 +68,11 @@ RAGFlow 中配置的知识库与专业助手可以被项目中的 RAGFlow 子智
 - **结构化数据查询**：通过 SQLModel/SQLAlchemy 查询 MySQL，并限制 Agent 只执行只读查询。
 - **企业知识库管理**：支持列出知识库、查看文档、上传并解析文档、重新解析和删除文档。
 - **RAGFlow 助手问答**：自动获取助手列表，选择合适的专业助手并发起提问。
+- **RAGFlow 文档图片检索**：直接检索 RAGFlow 解析 PDF/DOCX 后产生的视觉 Chunk，保留 `image_id`、页码和相关信息，并通过受保护代理把解析图片返回前端。
 - **互联网搜索**：通过 Tavily 检索公开资料，并在回答中保留原始来源链接。
 - **文件分析**：读取 Markdown、TXT、Word、PDF 和 Excel 文件。
+- **图片理解**：支持上传 PNG、JPEG 和 WebP，通过独立视觉模型完成看图描述、OCR、截图解读、图表分析和设备故障现象识别。
+- **跨模态图片检索**：使用 `qwen3-vl-embedding` 将文字和图片编码到统一向量空间，通过 Milvus 实现文搜图、图搜图和图文融合检索，并在前端返回相似图片与分数。
 - **文档生成**：生成 Markdown，并可在 Windows + Microsoft Word 环境中转换为 PDF。
 - **全生命周期记忆**：Redis Checkpointer 保存线程消息、任务计划和执行断点；Milvus 保存跨会话的偏好、规则、策略、模板和历史结论；MySQL 保存前端可恢复的聊天记录。
 - **vLLM 检索推理服务**：Embedding 与 Reranker 解耦为独立 vLLM Pooling 服务，形成“向量化 → Milvus Top-K 召回 → Cross-Encoder 重排 → Top-N 上下文注入”链路。
@@ -111,9 +115,17 @@ flowchart LR
     MAIN --> RAG[RAGFlow 助手]
     MAIN --> WEB[互联网搜索助手]
     MAIN --> DOC[文件与文档工具]
+    MAIN --> VISION[图片分析工具]
+    MAIN --> IMGSEARCH[图片知识库检索工具]
     DB --> MYSQL[(MySQL 业务数据)]
     RAG --> RF[(RAGFlow)]
+    RF --> RFVEC[(RAGFlow 内部文本与向量索引)]
+    RF --> RFIMG[(RAGFlow / MinIO 文档原图)]
+    RFIMG -->|受保护图片代理| UI
     WEB --> TAVILY[Tavily]
+    VISION --> VLM[OpenAI 兼容视觉模型]
+    IMGSEARCH --> MMEMBED[qwen3-vl-embedding]
+    MMEMBED --> IMAGES[(Milvus Image Collection)]
     MAIN --> SHORT[(Redis Checkpoint)]
     MAIN --> EMBED[vLLM Embedding]
     EMBED --> LONG[(Milvus Long-term Memory)]
@@ -128,6 +140,7 @@ deep_agent_project/
 ├── agent/                 # 主智能体、模型和子智能体配置
 │   └── async_graphs.py    # 异步 Supervisor 与后台子智能体 Graph
 ├── agent_memory/          # Milvus 用户级长期记忆
+├── image_knowledge/       # 多模态向量客户端、图片文件与 Milvus 索引
 ├── api/
 │   ├── routers/           # 任务、文件、RAGFlow 与 WebSocket 路由
 │   ├── schemas/           # Pydantic 请求模型
@@ -141,6 +154,7 @@ deep_agent_project/
 ├── tools/
 │   ├── database/          # MySQL/SQLModel 查询工具
 │   ├── memory/            # 长期记忆检索与保存工具
+│   ├── multimodal/        # 图片理解与视觉模型调用工具
 │   ├── document/          # Markdown 和 PDF 生成工具
 │   ├── file/              # 本地文件读取工具
 │   ├── ragflow/           # RAGFlow 知识库和助手工具
@@ -207,17 +221,29 @@ Copy-Item .env.example .env
 | `OPENAI_BASE_URL` | OpenAI 兼容接口地址 | 是 |
 | `OPENAI_API_KEY` | 模型服务 API Key | 是 |
 | `LLM_MODEL` | 接口实际支持的模型名 | 是 |
+| `VISION_BASE_URL` | OpenAI 兼容视觉模型接口；百炼使用 `https://dashscope.aliyuncs.com/compatible-mode/v1` | 使用图片分析时 |
+| `VISION_API_KEY` | 视觉模型接口密钥；使用百炼时填写 DashScope API Key | 使用图片分析时 |
+| `VISION_MODEL` | 云端视觉模型名，默认示例为 `qwen3-vl-flash` | 使用图片分析时 |
+| `VISION_MAX_IMAGE_MB` | 单张图片大小限制，默认 10 MB | 否 |
+| `MULTIMODAL_EMBEDDING_MODEL` | 跨模态检索模型，默认 `qwen3-vl-embedding` | 使用图片检索时 |
+| `MULTIMODAL_EMBEDDING_DIMENSION` | 图片 Collection 向量维度，默认 1024 | 使用图片检索时 |
+| `MULTIMODAL_SEARCH_MIN_SIMILARITY` | 图片检索最低余弦相似度，默认 0.2 | 否 |
+| `VLLM_VISION_MODEL` | 本地 vLLM 使用的 Hugging Face 视觉模型 ID | 本地部署视觉模型时 |
 | `REDIS_CHECKPOINT_URL` | Redis Stack Checkpointer 地址 | 是 |
 | `REDIS_CHECKPOINT_TTL_MINUTES` | 不活跃线程状态的保留时间 | 否 |
 | `MILVUS_URI` | Milvus 服务地址 | 是 |
 | `MILVUS_MEMORY_COLLECTION` | 长期记忆 Collection 名称 | 否 |
+| `MILVUS_IMAGE_COLLECTION` | 用户图片知识库 Collection 名称 | 否 |
 | `MEMORY_MIN_SIMILARITY` | 长期记忆召回最低相似度 | 否 |
-| `MEMORY_EMBEDDING_PROVIDER` | 长期记忆向量服务，默认 `vllm` | 否 |
-| `MEMORY_RERANKER_ENABLED` | 是否启用 vLLM Reranker | 否 |
-| `VLLM_EMBEDDING_BASE_URL` | vLLM OpenAI Embeddings API 地址 | 是 |
-| `VLLM_EMBEDDING_MODEL` | Embedding 模型名称 | 是 |
-| `VLLM_RERANKER_BASE_URL` | vLLM Cohere Rerank API 地址 | 是 |
-| `VLLM_RERANKER_MODEL` | Reranker 模型名称 | 是 |
+| `MEMORY_EMBEDDING_PROVIDER` | 长期记忆向量服务，可选 `api`、`vllm`、`hash`，默认 `api` | 否 |
+| `MEMORY_EMBEDDING_MODEL` | 云端 Embedding 模型，默认 `text-embedding-v4` | 使用 API 时 |
+| `MEMORY_RERANKER_ENABLED` | 是否对长期记忆候选结果重排 | 否 |
+| `MEMORY_RERANKER_PROVIDER` | 排序服务，可选 `api`、`vllm`、`none`，默认跟随向量服务 | 否 |
+| `MEMORY_RERANKER_MODEL` | 云端 Reranker 模型，默认 `gte-rerank-v2` | 使用 API 时 |
+| `VLLM_EMBEDDING_BASE_URL` | 本地 vLLM OpenAI Embeddings API 地址 | 使用 vLLM 时 |
+| `VLLM_EMBEDDING_MODEL` | 本地 Embedding 模型名称 | 使用 vLLM 时 |
+| `VLLM_RERANKER_BASE_URL` | 本地 vLLM Cohere Rerank API 地址 | 使用 vLLM 时 |
+| `VLLM_RERANKER_MODEL` | 本地 Reranker 模型名称 | 使用 vLLM 时 |
 | `DAYTONA_API_KEY` | Daytona 云沙箱 API Key | 是 |
 | `DAYTONA_API_URL` | Daytona API 地址，默认 `https://app.daytona.io/api` | 否 |
 | `DAYTONA_TARGET` | 沙箱区域；留空时使用组织默认区域 | 否 |
@@ -270,6 +296,39 @@ docker compose -p deep-agent-vllm -f deploy/vllm/docker-compose.yml up -d
 - Reranker：`http://127.0.0.1:8002/v1`
 
 检索流程首先从 Milvus 召回扩大后的候选集合，再调用 Reranker 计算 Query-Document 相关性分数并截取 Top-N。可以通过 `.env` 替换为其他 vLLM Pooling 模型或远程 GPU 服务；`MEMORY_ALLOW_HASH_FALLBACK=true` 可在推理服务不可用时启用本地降级。
+
+### 启动 vLLM 图片理解模型（可选）
+
+图片分析默认示例使用百炼 `qwen3-vl-flash`。只需配置 `VISION_BASE_URL`、`VISION_API_KEY` 和 `VISION_MODEL`，无需启动本地视觉容器。
+
+如果需要本地部署，Compose 还提供了独立的 `vision` Profile，默认加载 `VLLM_VISION_MODEL=Qwen/Qwen2.5-VL-7B-Instruct`，一次请求限制为一张图片：
+
+```powershell
+docker compose -p deep-agent-vllm -f deploy/vllm/docker-compose.yml --profile vision up -d vision
+```
+
+默认地址为 `http://127.0.0.1:8003/v1`。前端上传 PNG、JPEG 或 WebP 后，主 Agent 会先调用 `analyze_image`，再根据任务需要继续查询 RAGFlow、MySQL 或互联网。视觉服务默认独立启动；单卡显存不足时，不要与 Embedding、Reranker 同时运行，或调低 `VLLM_VISION_GPU_MEMORY_UTILIZATION` 并替换为更小的视觉模型。
+
+### 使用多模态图片知识库
+
+工作台右上角“图库”入口用于上传、查看和删除知识库图片。入库时，后端调用 `qwen3-vl-embedding` 生成图片向量，原图保存在用户隔离的 `runtime/image_knowledge/`，向量和元数据写入 `MILVUS_IMAGE_COLLECTION`。
+
+聊天窗口支持两种检索方式：
+
+```text
+文搜图：在图片知识库中查找红色运动鞋的图片
+图搜图：上传一张图片，然后询问“查找和这张图相似的案例”
+```
+
+主 Agent 会调用 `search_image_knowledge`。文字查询生成文字向量，图片查询生成图片向量，图文同时提供时生成融合向量；Milvus 返回用户范围内的 Top-K 结果，前端通过鉴权图片接口显示缩略图和相似度。检索结果也会写入 MySQL 消息元数据，刷新会话后仍可恢复。
+
+### 使用 RAGFlow 文档图片检索
+
+RAGFlow 上传并解析 PDF、DOCX 等文档后，会自行保存正文切片、向量和文档图片。用户要求获取论文中的图表、界面截图或插图时，RAGFlow 子智能体调用 `search_ragflow_document_images` 检索原始 Chunk；后端保留响应中的 `image_id`、文档名、页码和相关信息，再通过需要 `ragflow` 权限的图片代理接口读取 RAGFlow/MinIO 中的解析图片并展示在对话中。
+
+RAGFlow 的 `image_id` 对应解析阶段生成的视觉图片切片，可能包含图注、留白或组合图，不保证等同于 PDF 内嵌图片对象的原始文件。本项目会排除普通正文的版面截图，优先返回带视觉分析或图注的图片 Chunk，并对完全重复的图片去重。
+
+这一链路不经过项目的 Milvus 图片 Collection：Milvus 图库用于用户单独上传的图片；RAGFlow 文档图片继续由 RAGFlow 自己解析、索引和存储。用户上传查询图片时，系统先调用视觉模型提取主题、OCR 文字与视觉特征，再用这段描述检索 RAGFlow。图片结果会写入 MySQL 消息元数据，因此刷新会话后仍可恢复。
 
 ### Daytona 沙箱
 
@@ -347,6 +406,7 @@ RBAC 数据表：
 | `task` | 运行智能体任务 |
 | `files` | 上传、下载和查看会话文件 |
 | `ragflow` | 查看知识库、上传/解析/删除知识库文档 |
+| `image_knowledge` | 上传、查看、删除和检索多模态图片知识库 |
 | `conversations` | 创建会话和读取聊天记录 |
 
 登录后可以访问 `GET /api/auth/rbac` 查看当前用户、角色、权限的种子数据快照，便于本地调试。
@@ -361,6 +421,8 @@ RBAC 数据表：
 | `web-research` | 处理公开互联网信息并保留来源链接 |
 | `document-generation` | 生成 Markdown/PDF 文档 |
 | `long-term-memory` | 跨会话召回或保存用户偏好、规则、策略、模板和历史结论 |
+| `image-analysis` | 识别上传图片中的文字、界面、图表和可见现象 |
+| `image-retrieval` | 使用文字、图片或图文组合检索用户图片知识库 |
 
 Skill 是智能体的任务说明和决策流程，Tool 是真正执行数据库查询、上传文档或互联网搜索的代码。项目使用 DeepAgents 原生渐进式披露机制：Agent 初始只看到 Skill 的名称、描述和路径，任务匹配后才读取完整 `SKILL.md`。主 Agent 使用路由和文档 Skill；数据库、RAGFlow、网络子 Agent 分别只加载各自的执行 Skill。Daytona 启动会把这些 Skill 同步到隔离的远端来源目录；Agent Protocol 中的异步 Worker 使用独立只读 Skill 来源，避免领域技能互相泄漏。
 

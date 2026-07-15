@@ -113,6 +113,7 @@ httpx==0.28.1
     # via
     #   anthropic
     #   daytona
+    #   deep-agent-project
     #   google-genai
     #   httpx-ws
     #   langgraph-sdk

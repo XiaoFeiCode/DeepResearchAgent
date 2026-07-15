@@ -14,14 +14,20 @@ Use this skill to handle RAGFlow knowledge-base operations as a workflow, not as
    - Pick the assistant whose name or description best matches the question.
    - Ask that assistant.
 
-2. If the user asks to manage knowledge-base content, use the knowledge-base management flow:
+2. If the user asks for actual images, charts, screenshots, or illustrations from a RAGFlow document:
+   - Identify the target dataset and, when possible, the target document.
+   - Use `search_ragflow_document_images` so the original parsed images are returned to the UI.
+   - Do not replace the images with text-only descriptions or public web search results.
+   - For an uploaded query image, call `analyze_image` first and use its OCR and visual description as the retrieval query.
+
+3. If the user asks to manage knowledge-base content, use the knowledge-base management flow:
    - Inspect existing knowledge bases.
    - Create the target knowledge base if it does not exist.
    - Upload the provided files.
    - Parse uploaded documents unless the user explicitly says not to.
    - Inspect the target knowledge base again to confirm document status.
 
-3. If RAGFlow has no relevant assistant or no relevant knowledge base content, report that clearly. Do not silently fall back to internet search unless the main task explicitly allows public web fallback.
+4. If RAGFlow has no relevant assistant or no relevant knowledge base content, report that clearly. Do not silently fall back to internet search unless the main task explicitly allows public web fallback.
 
 ## Preferred Tools
 

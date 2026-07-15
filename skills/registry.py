@@ -32,6 +32,8 @@ SKILL_ASSIGNMENTS = {
         "web-research",
         "document-generation",
         "long-term-memory",
+        "image-analysis",
+        "image-retrieval",
     ],
     "database": ["database-query"],
     "ragflow": ["ragflow-knowledge-base"],

@@ -1,5 +1,5 @@
 from contextvars import ContextVar
-from typing import Optional
+from typing import Any, Optional
 
 # =================================================================================================
 # 核心知识点: ContextVars (上下文变量)
@@ -36,6 +36,10 @@ _session_dir_ctx: ContextVar[Optional[str]] = ContextVar("session_dir", default=
 # - 场景 ：当 Agent 打印日志或者通过 WebSocket 给前端发消息时，它需要知道：“我现在是正在服务张三，还是李四？” 这样消息才不会发错人。
 _thread_id_ctx: ContextVar[Optional[str]] = ContextVar("thread_id", default=None)
 _user_id_ctx: ContextVar[Optional[str]] = ContextVar("user_id", default=None)
+_result_metadata_ctx: ContextVar[dict[str, Any] | None] = ContextVar(
+    "result_metadata",
+    default=None,
+)
 
 
 def set_session_context(path: str):
@@ -81,7 +85,35 @@ def get_user_context() -> Optional[str]:
     return _user_id_ctx.get()
 
 
-def reset_session_context(session_token, thread_token=None, user_token=None):
+def set_result_metadata_context():
+    """为当前 Agent 任务创建结构化结果容器。"""
+    return _result_metadata_ctx.set({})
+
+
+def add_result_images(images: list[dict[str, Any]]) -> None:
+    """记录图片检索结果，供任务结束后写入 MySQL 消息元数据。"""
+    metadata = _result_metadata_ctx.get()
+    if metadata is None:
+        return
+    current = metadata.setdefault("images", [])
+    existing_ids = {item.get("id") for item in current}
+    for image in images:
+        if image.get("id") not in existing_ids:
+            current.append(dict(image))
+            existing_ids.add(image.get("id"))
+
+
+def get_result_metadata() -> dict[str, Any]:
+    metadata = _result_metadata_ctx.get() or {}
+    return {key: list(value) if isinstance(value, list) else value for key, value in metadata.items()}
+
+
+def reset_session_context(
+    session_token,
+    thread_token=None,
+    user_token=None,
+    result_metadata_token=None,
+):
     """
     清理/重置上下文。
     通常在请求处理结束 (finally 块) 中调用，防止内存泄漏或污染后续请求。
@@ -91,3 +123,5 @@ def reset_session_context(session_token, thread_token=None, user_token=None):
         _thread_id_ctx.reset(thread_token)
     if user_token:
         _user_id_ctx.reset(user_token)
+    if result_metadata_token is not None:
+        _result_metadata_ctx.reset(result_metadata_token)

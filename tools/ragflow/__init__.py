@@ -12,6 +12,7 @@ from tools.ragflow.knowledge_base import (
     inspect_ragflow_knowledge_base,
     setup_ragflow_knowledge_base,
 )
+from tools.ragflow.images import search_ragflow_document_images
 
 __all__ = [
     "get_assistant_list",
@@ -24,4 +25,5 @@ __all__ = [
     "delete_ragflow_documents",
     "inspect_ragflow_knowledge_base",
     "setup_ragflow_knowledge_base",
+    "search_ragflow_document_images",
 ]

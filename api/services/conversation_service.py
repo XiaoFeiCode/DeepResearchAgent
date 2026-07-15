@@ -3,7 +3,7 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import Column, JSON, Text, inspect, text
+from sqlalchemy import Column, JSON, Text, delete, inspect, text
 from sqlmodel import Field, Session, SQLModel, select
 
 from tools.database.mysql import get_engine
@@ -160,6 +160,20 @@ class ConversationService:
                 self._conversation_payload(conversation)
                 for conversation in session.exec(statement).all()
             ]
+
+    def delete_conversation(self, thread_id: str, user_id: str) -> None:
+        """删除当前用户的会话及其全部消息。"""
+        engine = self._require_engine()
+        with Session(engine) as session:
+            conversation = session.get(Conversation, thread_id)
+            if conversation is None or conversation.user_id != user_id:
+                raise ConversationAccessError("Conversation not found")
+
+            session.exec(
+                delete(ChatMessage).where(ChatMessage.conversation_id == thread_id)
+            )
+            session.delete(conversation)
+            session.commit()
 
     def _require_engine(self):
         if not self.available:

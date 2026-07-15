@@ -76,3 +76,22 @@ async def list_conversation_messages(
     except ConversationAccessError as error:
         raise HTTPException(status_code=404, detail="Conversation not found") from error
     return {"thread_id": thread_id, "messages": messages}
+
+
+@router.delete("/{thread_id}", status_code=204)
+async def delete_conversation(
+    thread_id: str,
+    request: Request,
+    current_user: AuthenticatedUser = Security(check_rbac, scopes=["conversations"]),
+):
+    service = _service(request)
+    if not service.available:
+        raise _unavailable_error(service)
+    try:
+        await asyncio.to_thread(
+            service.delete_conversation,
+            thread_id,
+            current_user.username,
+        )
+    except ConversationAccessError as error:
+        raise HTTPException(status_code=404, detail="Conversation not found") from error

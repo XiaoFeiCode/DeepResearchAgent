@@ -4,6 +4,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 
 from agent.main_agent import run_deep_agent
+from agent.result import AgentRunResult
 from api.services.conversation_service import ConversationService
 
 logger = logging.getLogger(__name__)
@@ -50,9 +51,17 @@ class TaskService:
     async def _run_and_persist(self, query: str, thread_id: str, user_id: str):
         await self._save_message(thread_id, user_id, "user", query)
         result = await self._runner(query, thread_id, user_id)
-        if isinstance(result, str) and result and result != "Done":
-            role = "system" if result.startswith("Error:") else "assistant"
-            await self._save_message(thread_id, user_id, role, result)
+        content = result.content if isinstance(result, AgentRunResult) else result
+        metadata = result.metadata if isinstance(result, AgentRunResult) else None
+        if isinstance(content, str) and content and content != "Done":
+            role = "system" if content.startswith("Error:") else "assistant"
+            await self._save_message(
+                thread_id,
+                user_id,
+                role,
+                content,
+                metadata=metadata,
+            )
         return result
 
     async def _save_message(
@@ -61,6 +70,7 @@ class TaskService:
         user_id: str,
         role: str,
         content: str,
+        metadata: dict | None = None,
     ) -> None:
         service = self._conversation_service
         if service is None or not service.available:
@@ -72,6 +82,7 @@ class TaskService:
                 user_id,
                 role,
                 content,
+                metadata,
             )
         except Exception:
             logger.exception("Failed to persist %s message for thread %s", role, thread_id)

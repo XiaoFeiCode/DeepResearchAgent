@@ -7,8 +7,10 @@ import WorkspaceDrawer from './components/WorkspaceDrawer.vue'
 import WorkspaceRail from './components/WorkspaceRail.vue'
 import type {
   AgentStatus,
+  ConversationSummary,
   DrawerMode,
   FileItem,
+  ImageKnowledgeItem,
   Message,
   RagflowDataset,
   RagflowDocument,
@@ -30,6 +32,7 @@ const getInitialThreadId = () => {
 
 const inputQuery = ref('')
 const messages = ref<Message[]>([])
+const conversations = ref<ConversationSummary[]>([])
 const status = ref<AgentStatus>('idle')
 const socket = ref<WebSocket | null>(null)
 const currentThreadId = ref(getInitialThreadId())
@@ -47,6 +50,13 @@ const ragflowLoading = ref(false)
 const ragflowUploading = ref(false)
 const ragflowMessage = ref('')
 const ragflowError = ref('')
+const imageKnowledgeItems = ref<ImageKnowledgeItem[]>([])
+const selectedImageFiles = ref<File[]>([])
+const imageDescription = ref('')
+const imageKnowledgeLoading = ref(false)
+const imageKnowledgeUploading = ref(false)
+const imageKnowledgeMessage = ref('')
+const imageKnowledgeError = ref('')
 const authToken = ref(localStorage.getItem(AUTH_STORAGE_KEY) || '')
 const authUser = ref('')
 const loginUsername = ref('admin')
@@ -54,10 +64,9 @@ const loginPassword = ref('')
 const authLoading = ref(false)
 const authError = ref('')
 let reconnectTimer: number | undefined
+const imageObjectUrls = new Map<string, string>()
 
 const isAuthenticated = computed(() => authToken.value.length > 0)
-const latestAiMessage = computed(() => [...messages.value].reverse().find((message) => message.role === 'ai'))
-const latestLogs = computed(() => latestAiMessage.value?.logs?.slice(-4) ?? [])
 const selectedDataset = computed(() => ragflowDatasets.value.find((dataset) => dataset.id === selectedDatasetId.value))
 const canSend = computed(() => status.value !== 'running' && (inputQuery.value.trim().length > 0 || selectedFiles.value.length > 0))
 
@@ -65,6 +74,30 @@ const applyAuthHeader = (token: string) => {
   if (token) axios.defaults.headers.common.Authorization = `Bearer ${token}`
   else delete axios.defaults.headers.common.Authorization
 }
+
+const releaseImageObjectUrls = () => {
+  for (const url of imageObjectUrls.values()) URL.revokeObjectURL(url)
+  imageObjectUrls.clear()
+}
+
+const hydrateImageItem = async (image: ImageKnowledgeItem): Promise<ImageKnowledgeItem> => {
+  const cachedUrl = imageObjectUrls.get(image.id)
+  if (cachedUrl) return { ...image, previewUrl: cachedUrl }
+
+  try {
+    const response = await axios.get(`${API_BASE}${image.content_url}`, {
+      responseType: 'blob',
+    })
+    const previewUrl = URL.createObjectURL(response.data)
+    imageObjectUrls.set(image.id, previewUrl)
+    return { ...image, previewUrl }
+  } catch (error) {
+    console.error(`Failed to load image preview: ${image.filename}`, error)
+    return image
+  }
+}
+
+const hydrateImageItems = (images: ImageKnowledgeItem[]) => Promise.all(images.map(hydrateImageItem))
 
 const clearAuthState = () => {
   authToken.value = ''
@@ -75,6 +108,7 @@ const clearAuthState = () => {
   const websocket = socket.value
   socket.value = null
   websocket?.close()
+  releaseImageObjectUrls()
 }
 
 const validateToken = async () => {
@@ -105,6 +139,7 @@ const login = async () => {
     applyAuthHeader(authToken.value)
     await validateToken()
     await fetchConversationMessages()
+    await fetchConversations()
     connectWebSocket()
   } catch (error: any) {
     authError.value = error.response?.data?.detail || error.message || '登录失败'
@@ -116,8 +151,11 @@ const login = async () => {
 const logout = () => {
   clearAuthState()
   messages.value = []
+  conversations.value = []
   fileList.value = []
   selectedFiles.value = []
+  imageKnowledgeItems.value = []
+  selectedImageFiles.value = []
   currentSessionPath.value = ''
   currentSessionUrl.value = ''
   status.value = 'idle'
@@ -143,20 +181,19 @@ const fetchConversationMessages = async (threadId = currentThreadId.value) => {
     messages.value = (response.data.messages ?? []).map((message: any): Message => ({
       role: message.role === 'assistant' ? 'ai' : message.role,
       content: message.content,
+      images: message.metadata?.images ?? [],
       timestamp: message.timestamp,
     }))
+    await Promise.all(
+      messages.value.map(async (message) => {
+        if (message.images?.length) message.images = await hydrateImageItems(message.images)
+      }),
+    )
   } catch (error: any) {
     if (error.response?.status === 404) {
       currentThreadId.value = crypto.randomUUID()
       sessionStorage.setItem(THREAD_STORAGE_KEY, currentThreadId.value)
       messages.value = []
-      try {
-        await axios.post(`${API_BASE}/api/conversations`, {
-          thread_id: currentThreadId.value,
-        })
-      } catch (createError) {
-        console.error('Failed to create a user-scoped conversation', createError)
-      }
       return
     }
     if (error.response?.status !== 503) {
@@ -165,12 +202,62 @@ const fetchConversationMessages = async (threadId = currentThreadId.value) => {
   }
 }
 
-const starterPrompts = [
-  '查看 RAGFlow 里有哪些知识库',
-  '查询数据库里的某个条目',
-  '帮我生成一份空调安装说明 PDF',
-  '把上传文件整理成摘要',
-]
+const fetchConversations = async () => {
+  try {
+    const response = await axios.get(`${API_BASE}/api/conversations`, {
+      params: { limit: 100 },
+    })
+    conversations.value = (response.data.conversations ?? []).filter(
+      (conversation: ConversationSummary) => conversation.title !== '新会话',
+    )
+  } catch (error: any) {
+    if (error.response?.status !== 503) console.error('Failed to load conversations', error)
+  }
+}
+
+const selectConversation = async (threadId: string) => {
+  if (status.value === 'running' || threadId === currentThreadId.value) return
+
+  currentThreadId.value = threadId
+  sessionStorage.setItem(THREAD_STORAGE_KEY, threadId)
+  messages.value = []
+  fileList.value = []
+  selectedFiles.value = []
+  currentSessionPath.value = ''
+  currentSessionUrl.value = ''
+  await fetchConversationMessages(threadId)
+  connectWebSocket()
+}
+
+const deleteConversation = async (conversation: ConversationSummary) => {
+  if (status.value === 'running') return
+  if (!window.confirm(`确定删除会话“${conversation.title}”吗？删除后无法恢复。`)) return
+
+  try {
+    await axios.delete(
+      `${API_BASE}/api/conversations/${encodeURIComponent(conversation.id)}`,
+    )
+    conversations.value = conversations.value.filter((item) => item.id !== conversation.id)
+
+    if (conversation.id === currentThreadId.value) {
+      currentThreadId.value = crypto.randomUUID()
+      sessionStorage.setItem(THREAD_STORAGE_KEY, currentThreadId.value)
+      messages.value = []
+      fileList.value = []
+      selectedFiles.value = []
+      currentSessionPath.value = ''
+      currentSessionUrl.value = ''
+      connectWebSocket()
+    }
+  } catch (error: any) {
+    const detail = error.response?.data?.detail || error.message || '未知错误'
+    messages.value.push({
+      role: 'system',
+      content: `删除会话失败：${detail}`,
+      timestamp: Date.now(),
+    })
+  }
+}
 
 const fetchFiles = async () => {
   if (!currentSessionPath.value) return
@@ -258,6 +345,85 @@ const openKnowledgeDrawer = () => {
   fetchRagflowDatasets()
 }
 
+const showImageKnowledgeMessage = (message: string, isError = false) => {
+  imageKnowledgeMessage.value = isError ? '' : message
+  imageKnowledgeError.value = isError ? message : ''
+}
+
+const fetchImageKnowledge = async () => {
+  try {
+    imageKnowledgeLoading.value = true
+    showImageKnowledgeMessage('')
+    const response = await axios.get(`${API_BASE}/api/image-knowledge/images`)
+    imageKnowledgeItems.value = await hydrateImageItems(response.data.images ?? [])
+  } catch (error: any) {
+    showImageKnowledgeMessage(
+      `读取图片知识库失败：${error.response?.data?.detail || error.message || '未知错误'}`,
+      true,
+    )
+  } finally {
+    imageKnowledgeLoading.value = false
+  }
+}
+
+const openImageKnowledgeDrawer = () => {
+  drawerMode.value = 'images'
+  isSidebarOpen.value = true
+  fetchImageKnowledge()
+}
+
+const handleImageKnowledgeFileChange = (event: Event) => {
+  const target = event.target as HTMLInputElement
+  if (!target.files?.length) return
+  selectedImageFiles.value = [...selectedImageFiles.value, ...Array.from(target.files)]
+  target.value = ''
+}
+
+const uploadImageKnowledge = async () => {
+  if (!selectedImageFiles.value.length) return
+  try {
+    imageKnowledgeUploading.value = true
+    showImageKnowledgeMessage('')
+    const formData = new FormData()
+    formData.append('description', imageDescription.value)
+    selectedImageFiles.value.forEach((file) => formData.append('files', file))
+    const response = await axios.post(
+      `${API_BASE}/api/image-knowledge/images/upload`,
+      formData,
+      { headers: { 'Content-Type': 'multipart/form-data' } },
+    )
+    const count = response.data.images?.length ?? 0
+    selectedImageFiles.value = []
+    imageDescription.value = ''
+    showImageKnowledgeMessage(`已完成 ${count} 张图片的向量化和入库`)
+    await fetchImageKnowledge()
+  } catch (error: any) {
+    showImageKnowledgeMessage(
+      `图片入库失败：${error.response?.data?.detail || error.message || '未知错误'}`,
+      true,
+    )
+  } finally {
+    imageKnowledgeUploading.value = false
+  }
+}
+
+const deleteImageKnowledge = async (image: ImageKnowledgeItem) => {
+  if (!window.confirm(`确定从图片知识库删除“${image.filename}”吗？`)) return
+  try {
+    await axios.delete(`${API_BASE}/api/image-knowledge/images/${encodeURIComponent(image.id)}`)
+    const previewUrl = imageObjectUrls.get(image.id)
+    if (previewUrl) URL.revokeObjectURL(previewUrl)
+    imageObjectUrls.delete(image.id)
+    showImageKnowledgeMessage(`已删除图片：${image.filename}`)
+    await fetchImageKnowledge()
+  } catch (error: any) {
+    showImageKnowledgeMessage(
+      `删除图片失败：${error.response?.data?.detail || error.message || '未知错误'}`,
+      true,
+    )
+  }
+}
+
 const handleKbFileChange = (event: Event) => {
   const target = event.target as HTMLInputElement
   if (!target.files?.length) return
@@ -341,7 +507,7 @@ const handleSocketMessage = (payload: any) => {
     currentSessionPath.value = eventData.path
     const parts = eventData.path.split(/output[\\/]/)
     if (parts.length > 1) currentSessionUrl.value = `${API_BASE}/outputs/${parts[1].replace(/\\/g, '/')}`
-    isSidebarOpen.value = true
+    // 会话启动时只刷新文件状态，避免空文件抽屉遮挡聊天结果。
     fetchFiles()
   }
 
@@ -379,11 +545,20 @@ const handleSocketMessage = (payload: any) => {
     })
   }
 
+  if (event === 'image_search_result' && lastAiMessage) {
+    const images = (eventData.images ?? []) as ImageKnowledgeItem[]
+    lastAiMessage.images = images
+    void hydrateImageItems(images).then((hydrated) => {
+      lastAiMessage.images = hydrated
+    })
+  }
+
   if (event === 'task_result') {
     if (lastAiMessage) lastAiMessage.content = eventData.result
     else messages.value.push({ role: 'ai', content: eventData.result, timestamp: Date.now() })
     status.value = 'idle'
     fetchFiles()
+    fetchConversations()
   }
 
   if (event === 'error') {
@@ -487,19 +662,15 @@ const startNewChat = async () => {
   currentSessionPath.value = ''
   currentSessionUrl.value = ''
   status.value = 'idle'
-  try {
-    await axios.post(`${API_BASE}/api/conversations`, { thread_id: currentThreadId.value })
-  } catch (error: any) {
-    if (error.response?.status !== 503) console.error('Failed to create conversation', error)
-  }
   connectWebSocket()
 }
 
 onMounted(async () => {
-  isSidebarOpen.value = window.innerWidth > 1120
+  isSidebarOpen.value = false
   const ok = await validateToken()
   if (ok) {
     await fetchConversationMessages()
+    await fetchConversations()
     connectWebSocket()
   }
 })
@@ -509,6 +680,7 @@ onBeforeUnmount(() => {
   const websocket = socket.value
   socket.value = null
   websocket?.close()
+  releaseImageObjectUrls()
 })
 </script>
 
@@ -535,32 +707,31 @@ onBeforeUnmount(() => {
   </main>
 
   <div v-else class="app-shell" :class="{ 'drawer-visible': isSidebarOpen }">
-    <WorkspaceRail :status="status" :thread-id="currentThreadId" :file-count="fileList.length" :logs="latestLogs" />
+    <WorkspaceRail
+      :status="status"
+      :thread-id="currentThreadId"
+      :file-count="fileList.length"
+      :conversations="conversations"
+      :user-name="authUser || loginUsername"
+      @new-chat="startNewChat"
+      @open-files="openFilesDrawer"
+      @open-knowledge="openKnowledgeDrawer"
+      @open-images="openImageKnowledgeDrawer"
+      @select-conversation="selectConversation"
+      @delete-conversation="deleteConversation"
+      @logout="logout"
+    />
 
     <main class="conversation-pane">
       <header class="topbar">
-        <div>
-          <span class="eyebrow">Agent Console</span>
-          <h1>把问题、知识库和文件串起来</h1>
+        <div class="conversation-title">
+          <h1>DeepAgent</h1>
+          <span class="run-status" :class="status">{{ status === 'running' ? '执行中' : '就绪' }}</span>
         </div>
-        <div class="topbar-actions">
-          <span class="auth-user">{{ authUser || loginUsername }}</span>
-          <button class="files-toggle" type="button" @click="openFilesDrawer">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h4l2 2h5A2.5 2.5 0 0 1 20 7.5v9A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5v-11Z" /></svg>
-            文件
-          </button>
-          <button class="files-toggle knowledge-toggle" type="button" @click="openKnowledgeDrawer">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v13A2.5 2.5 0 0 1 17.5 21h-11A2.5 2.5 0 0 1 4 18.5v-13Z" />
-              <path d="M8 7h8M8 11h8M8 15h5" />
-            </svg>
-            知识库
-          </button>
-          <button class="new-chat-button" type="button" :disabled="status === 'running'" @click="startNewChat">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
-            新会话
-          </button>
-          <button class="files-toggle" type="button" @click="logout">退出</button>
+        <div class="mobile-toolbar">
+          <button type="button" title="文件" aria-label="文件" @click="openFilesDrawer">文件</button>
+          <button type="button" title="知识库" aria-label="知识库" @click="openKnowledgeDrawer">知识库</button>
+          <button type="button" title="新对话" aria-label="新对话" :disabled="status === 'running'" @click="startNewChat">新对话</button>
         </div>
       </header>
 
@@ -570,12 +741,10 @@ onBeforeUnmount(() => {
         :input-query="inputQuery"
         :selected-files="selectedFiles"
         :can-send="canSend"
-        :starter-prompts="starterPrompts"
         @update:input-query="inputQuery = $event"
         @send="sendMessage"
         @file-change="handleFileChange"
         @remove-file="selectedFiles.splice($event, 1)"
-        @use-prompt="inputQuery = $event"
         @download-file="downloadFile"
       />
     </main>
@@ -593,8 +762,15 @@ onBeforeUnmount(() => {
       :ragflow-uploading="ragflowUploading"
       :ragflow-message="ragflowMessage"
       :ragflow-error="ragflowError"
+      :image-knowledge-items="imageKnowledgeItems"
+      :selected-image-files="selectedImageFiles"
+      :image-description="imageDescription"
+      :image-knowledge-loading="imageKnowledgeLoading"
+      :image-knowledge-uploading="imageKnowledgeUploading"
+      :image-knowledge-message="imageKnowledgeMessage"
+      :image-knowledge-error="imageKnowledgeError"
       @close="isSidebarOpen = false"
-      @refresh="drawerMode === 'knowledge' ? fetchRagflowDatasets() : fetchFiles()"
+      @refresh="drawerMode === 'knowledge' ? fetchRagflowDatasets() : drawerMode === 'images' ? fetchImageKnowledge() : fetchFiles()"
       @download-file="downloadFile"
       @select-dataset="selectRagflowDataset"
       @kb-file-change="handleKbFileChange"
@@ -602,6 +778,11 @@ onBeforeUnmount(() => {
       @upload-kb-files="uploadKnowledgeFiles"
       @parse-document="parseKnowledgeDocument"
       @delete-document="deleteKnowledgeDocument"
+      @update:image-description="imageDescription = $event"
+      @image-file-change="handleImageKnowledgeFileChange"
+      @remove-image-file="selectedImageFiles.splice($event, 1)"
+      @upload-images="uploadImageKnowledge"
+      @delete-image="deleteImageKnowledge"
     />
   </div>
 </template>

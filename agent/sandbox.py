@@ -13,8 +13,9 @@ from daytona import Daytona, DaytonaConfig, Sandbox
 from deepagents.backends.protocol import BackendProtocol
 from dotenv import find_dotenv, load_dotenv
 from langchain.tools import ToolRuntime
+from langgraph.config import get_config
 from langchain_daytona import DaytonaSandbox
-from api.context import get_user_context
+from api.context import get_thread_context, get_user_context
 from skills.registry import (
     INSTALLED_SKILLS_ROOT,
     REMOTE_SKILLS_ROOT,
@@ -180,8 +181,13 @@ class DaytonaSandboxManager:
 
     def backend_for_runtime(self, runtime: ToolRuntime[Any, Any]) -> BackendProtocol:
         """Resolve the current thread's backend for DeepAgents tools."""
-        configurable = (runtime.config or {}).get("configurable", {})
-        thread_id = configurable.get("thread_id")
+        # DeepAgents 的文件系统中间件会传入不含 config 的 Runtime；工具调用
+        # 仍可能传入 ToolRuntime。两种运行时都从同一份 RunnableConfig 取线程 ID。
+        config = getattr(runtime, "config", None)
+        if config is None:
+            config = get_config()
+        configurable = (config or {}).get("configurable", {})
+        thread_id = configurable.get("thread_id") or get_thread_context()
         if not thread_id:
             raise RuntimeError("The Daytona backend requires configurable.thread_id")
         return self.get_backend(str(thread_id))

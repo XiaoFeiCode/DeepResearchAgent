@@ -1,7 +1,7 @@
-from fastapi import APIRouter, File, Form, Request, Security, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, Response, Security, UploadFile
 from fastapi.concurrency import run_in_threadpool
 
-from api.schemas import RagflowDocumentRequest
+from api.schemas import RagflowDocumentRequest, RagflowImageSearchRequest
 from api.security import check_rbac
 from api.services import RagflowService
 from tools.ragflow.base import _format_ragflow_error
@@ -86,3 +86,47 @@ async def delete_ragflow_documents(
         )
     except Exception as error:
         return {"error": f"删除 RAGFlow 文档失败: {error}"}
+
+
+@router.post("/images/search")
+async def search_ragflow_images(
+    payload: RagflowImageSearchRequest,
+    request: Request,
+    _current_user=Security(check_rbac, scopes=["ragflow"]),
+):
+    try:
+        return await run_in_threadpool(
+            _service(request).search_images,
+            payload.query,
+            payload.dataset_name_or_id,
+            payload.document_name_or_id,
+            payload.limit,
+        )
+    except (ValueError, LookupError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(status_code=502, detail=f"RAGFlow 图片检索失败: {error}") from error
+
+
+@router.get("/images/{image_id}")
+async def get_ragflow_image(
+    image_id: str,
+    request: Request,
+    _current_user=Security(check_rbac, scopes=["ragflow"]),
+):
+    try:
+        content, content_type = await run_in_threadpool(
+            _service(request).get_image,
+            image_id,
+        )
+        return Response(
+            content=content,
+            media_type=content_type,
+            headers={"Cache-Control": "private, max-age=3600"},
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(status_code=502, detail=f"读取 RAGFlow 图片失败: {error}") from error

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import type { DrawerMode, FileItem, RagflowDataset, RagflowDocument } from '../types'
+import type { DrawerMode, FileItem, ImageKnowledgeItem, RagflowDataset, RagflowDocument } from '../types'
+import ImageKnowledgeManager from './ImageKnowledgeManager.vue'
 import KnowledgeBaseManager from './KnowledgeBaseManager.vue'
 import SessionFiles from './SessionFiles.vue'
 
@@ -15,6 +16,13 @@ defineProps<{
   ragflowUploading: boolean
   ragflowMessage: string
   ragflowError: string
+  imageKnowledgeItems: ImageKnowledgeItem[]
+  selectedImageFiles: File[]
+  imageDescription: string
+  imageKnowledgeLoading: boolean
+  imageKnowledgeUploading: boolean
+  imageKnowledgeMessage: string
+  imageKnowledgeError: string
 }>()
 
 const emit = defineEmits<{
@@ -27,6 +35,11 @@ const emit = defineEmits<{
   'upload-kb-files': []
   'parse-document': [document: RagflowDocument]
   'delete-document': [document: RagflowDocument]
+  'update:image-description': [value: string]
+  'image-file-change': [event: Event]
+  'remove-image-file': [index: number]
+  'upload-images': []
+  'delete-image': [image: ImageKnowledgeItem]
 }>()
 </script>
 
@@ -34,11 +47,11 @@ const emit = defineEmits<{
   <aside class="files-drawer open">
     <div class="drawer-header">
       <div>
-        <span class="eyebrow">{{ mode === 'knowledge' ? 'RAGFlow' : 'Workspace' }}</span>
-        <h2>{{ mode === 'knowledge' ? '知识库管理' : '会话文件' }}</h2>
+        <span class="eyebrow">{{ mode === 'knowledge' ? 'RAGFlow' : mode === 'images' ? 'Milvus' : 'Workspace' }}</span>
+        <h2>{{ mode === 'knowledge' ? '知识库管理' : mode === 'images' ? '多模态图片库' : '会话文件' }}</h2>
       </div>
       <div class="drawer-actions">
-        <button type="button" :aria-label="mode === 'knowledge' ? '刷新知识库' : '刷新文件'" @click="emit('refresh')">
+        <button type="button" :aria-label="mode === 'knowledge' ? '刷新知识库' : mode === 'images' ? '刷新图片库' : '刷新文件'" @click="emit('refresh')">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.7M20 4v6h-6" /></svg>
         </button>
         <button type="button" aria-label="关闭文件栏" @click="emit('close')">
@@ -49,7 +62,7 @@ const emit = defineEmits<{
 
     <SessionFiles v-if="mode === 'files'" :files="files" @download="emit('download-file', $event)" />
     <KnowledgeBaseManager
-      v-else
+      v-else-if="mode === 'knowledge'"
       :datasets="datasets"
       :documents="documents"
       :selected-dataset="selectedDataset"
@@ -65,6 +78,21 @@ const emit = defineEmits<{
       @upload="emit('upload-kb-files')"
       @parse="emit('parse-document', $event)"
       @delete="emit('delete-document', $event)"
+    />
+    <ImageKnowledgeManager
+      v-else
+      :images="imageKnowledgeItems"
+      :selected-files="selectedImageFiles"
+      :description="imageDescription"
+      :loading="imageKnowledgeLoading"
+      :uploading="imageKnowledgeUploading"
+      :message="imageKnowledgeMessage"
+      :error="imageKnowledgeError"
+      @update:description="emit('update:image-description', $event)"
+      @file-change="emit('image-file-change', $event)"
+      @remove-file="emit('remove-image-file', $event)"
+      @upload="emit('upload-images')"
+      @delete="emit('delete-image', $event)"
     />
   </aside>
 </template>

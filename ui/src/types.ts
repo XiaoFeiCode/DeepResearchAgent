@@ -1,5 +1,5 @@
 export type AgentStatus = 'idle' | 'running'
-export type DrawerMode = 'files' | 'knowledge'
+export type DrawerMode = 'files' | 'knowledge' | 'images'
 
 export interface LogItem {
   type: string
@@ -21,7 +21,31 @@ export interface Message {
   content: string
   logs?: LogItem[]
   files?: FileItem[]
+  images?: ImageKnowledgeItem[]
   timestamp?: number
+}
+
+export interface ConversationSummary {
+  id: string
+  title: string
+  created_at: string
+  updated_at: string
+}
+
+export interface ImageKnowledgeItem {
+  id: string
+  filename: string
+  description?: string
+  content_type?: string
+  created_at?: string
+  content_url: string
+  score?: number
+  previewUrl?: string
+  source?: 'image_knowledge' | 'ragflow'
+  image_id?: string
+  document_id?: string
+  document_name?: string
+  page?: number | null
 }
 
 export interface RagflowDataset {

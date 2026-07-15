@@ -69,5 +69,41 @@ services:
               count: 1
               capabilities: [gpu]
 
+  vision:
+    image: vllm/vllm-openai:latest
+    container_name: deep-agent-vllm-vision
+    profiles: ["vision"]
+    restart: unless-stopped
+    ipc: host
+    ports:
+      - "8003:8000"
+    volumes:
+      - huggingface_cache:/root/.cache/huggingface
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+      HF_ENDPOINT: ${HF_ENDPOINT:-https://huggingface.co}
+    command:
+      - --model
+      - ${VLLM_VISION_MODEL:-Qwen/Qwen2.5-VL-7B-Instruct}
+      - --served-model-name
+      - ${VLLM_VISION_MODEL:-Qwen/Qwen2.5-VL-7B-Instruct}
+      - --dtype
+      - auto
+      - --max-model-len
+      - ${VLLM_VISION_MAX_MODEL_LEN:-8192}
+      - --limit-mm-per-prompt
+      - image=1
+      - --gpu-memory-utilization
+      - ${VLLM_VISION_GPU_MEMORY_UTILIZATION:-0.85}
+      - --api-key
+      - ${VISION_API_KEY:-local-vllm}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
 volumes:
   huggingface_cache:

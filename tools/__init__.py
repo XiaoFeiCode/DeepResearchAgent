@@ -1,6 +1,7 @@
 from tools.database import execute_sql_query, get_table_data, list_sql_tables
 from tools.document import convert_md_to_pdf, generate_markdown
 from tools.file import read_file_content
+from tools.multimodal import analyze_image, search_image_knowledge
 from tools.ragflow import (
     create_ask_delete,
     create_ragflow_dataset,
@@ -11,6 +12,7 @@ from tools.ragflow import (
     list_ragflow_documents,
     parse_ragflow_documents,
     setup_ragflow_knowledge_base,
+    search_ragflow_document_images,
     upload_ragflow_documents,
 )
 from tools.search import internet_search
@@ -19,6 +21,8 @@ __all__ = [
     "generate_markdown",
     "convert_md_to_pdf",
     "read_file_content",
+    "analyze_image",
+    "search_image_knowledge",
     "internet_search",
     "list_sql_tables",
     "get_table_data",
@@ -33,4 +37,5 @@ __all__ = [
     "delete_ragflow_documents",
     "inspect_ragflow_knowledge_base",
     "setup_ragflow_knowledge_base",
+    "search_ragflow_document_images",
 ]
