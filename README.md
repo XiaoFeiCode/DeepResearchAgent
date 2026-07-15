@@ -250,6 +250,7 @@ Copy-Item .env.example .env
 | `DAYTONA_API_URL` | Daytona API 地址，默认 `https://app.daytona.io/api` | 否 |
 | `DAYTONA_TARGET` | 沙箱区域；留空时使用组织默认区域 | 否 |
 | `DAYTONA_COMMAND_TIMEOUT_SECONDS` | 沙箱命令最大执行时间 | 否 |
+| `DAYTONA_AUTO_STOP_MINUTES` | 异常残留沙箱无操作多久后自动停止并删除，默认 60 分钟 | 否 |
 | `API_AUTH_ENABLED` | 是否启用 API 鉴权，默认 `true` | 否 |
 | `API_AUTH_SECRET` | JWT 签名密钥，生产环境必须改成强随机值 | 是 |
 | `API_TOKEN_EXPIRE_MINUTES` | 登录 Token 过期时间 | 否 |

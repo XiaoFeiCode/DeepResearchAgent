@@ -335,6 +335,14 @@ async def run_deep_agent(
             )
         except Exception as sync_error:
             print(f"Failed to sync Daytona workspace: {sync_error}")
+        finally:
+            try:
+                await asyncio.to_thread(
+                    daytona_sandbox_manager.release,
+                    thread_id,
+                )
+            except Exception as release_error:
+                print(f"Failed to release Daytona sandbox: {release_error}")
         # 8. [资源清理] 必须重置 ContextVars，防止线程池复用导致的上下文污染
         if 'session_token' in locals():
             reset_session_context(

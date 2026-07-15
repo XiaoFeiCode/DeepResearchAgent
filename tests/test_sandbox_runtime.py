@@ -1,11 +1,53 @@
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from agent.sandbox import DaytonaSandboxManager
 
 
 class DaytonaSandboxRuntimeTests(unittest.TestCase):
+    def test_new_sandbox_is_ephemeral_and_labeled(self):
+        manager = DaytonaSandboxManager()
+        client = Mock()
+        sandbox = Mock()
+        client.create.return_value = sandbox
+        backend = Mock()
+        backend.execute.return_value = SimpleNamespace(exit_code=0, output="")
+
+        with (
+            patch.object(manager, "_get_client", return_value=client),
+            patch("agent.sandbox.DaytonaSandbox", return_value=backend),
+            patch.object(manager, "_upload_project_skills"),
+        ):
+            self.assertIs(manager.get_backend("thread-1234567890"), backend)
+
+        params = client.create.call_args.args[0]
+        self.assertTrue(params.ephemeral)
+        self.assertEqual(params.labels["project"], "deep-agent-project")
+        self.assertEqual(params.labels["thread_id"], "thread-1234567890")
+
+    def test_release_removes_and_deletes_thread_sandbox(self):
+        manager = DaytonaSandboxManager()
+        client = Mock()
+        sandbox = Mock()
+        manager._client = client
+        manager._sandboxes["thread-1"] = sandbox
+        manager._backends["thread-1"] = Mock()
+
+        manager.release("thread-1")
+
+        client.delete.assert_called_once_with(sandbox)
+        self.assertNotIn("thread-1", manager._sandboxes)
+        self.assertNotIn("thread-1", manager._backends)
+
+    def test_release_unknown_thread_is_a_noop(self):
+        manager = DaytonaSandboxManager()
+        manager._client = Mock()
+
+        manager.release("missing-thread")
+
+        manager._client.delete.assert_not_called()
+
     def test_backend_uses_runtime_config_when_available(self):
         manager = DaytonaSandboxManager()
         runtime = SimpleNamespace(config={"configurable": {"thread_id": "thread-old"}})

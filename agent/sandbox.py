@@ -9,7 +9,7 @@ import threading
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from daytona import Daytona, DaytonaConfig, Sandbox
+from daytona import CreateSandboxFromSnapshotParams, Daytona, DaytonaConfig, Sandbox
 from deepagents.backends.protocol import BackendProtocol
 from dotenv import find_dotenv, load_dotenv
 from langchain.tools import ToolRuntime
@@ -30,7 +30,7 @@ REMOTE_WORKSPACE = "/home/daytona/workspace"
 
 
 class DaytonaSandboxManager:
-    """Create one reusable Daytona sandbox for each conversation thread."""
+    """Manage one reusable Daytona sandbox for each active conversation task."""
 
     def __init__(self) -> None:
         self._client: Daytona | None = None
@@ -62,7 +62,21 @@ class DaytonaSandboxManager:
             if backend is not None:
                 return backend
 
-            sandbox = self._get_client().create()
+            # 临时沙箱在任务结束时会主动删除；若服务异常退出，Daytona 也会在
+            # 沙箱自动停止后将其删除，避免远端磁盘长期累积。
+            sandbox = self._get_client().create(
+                CreateSandboxFromSnapshotParams(
+                    name=f"deep-agent-{thread_id[:12]}",
+                    labels={
+                        "project": "deep-agent-project",
+                        "thread_id": thread_id,
+                    },
+                    auto_stop_interval=int(
+                        os.getenv("DAYTONA_AUTO_STOP_MINUTES", "60")
+                    ),
+                    ephemeral=True,
+                )
+            )
             backend = DaytonaSandbox(
                 sandbox=sandbox,
                 timeout=int(os.getenv("DAYTONA_COMMAND_TIMEOUT_SECONDS", "1800")),
@@ -260,6 +274,17 @@ class DaytonaSandboxManager:
                     continue
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_bytes(response.content)
+
+    def release(self, thread_id: str) -> None:
+        """Delete a thread sandbox after its files have been synchronized locally."""
+        with self._lock:
+            sandbox = self._sandboxes.pop(thread_id, None)
+            self._backends.pop(thread_id, None)
+            client = self._client
+
+        if sandbox is None or client is None:
+            return
+        client.delete(sandbox)
 
     def close(self) -> None:
         """Delete managed sandboxes so a stopped API does not keep billing."""
