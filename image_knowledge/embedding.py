@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import base64
+import io
 import os
 from pathlib import Path
 from typing import Any
 
 import httpx
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 SUPPORTED_IMAGE_TYPES = {
     ".jpg": "image/jpeg",
@@ -18,14 +20,14 @@ SUPPORTED_IMAGE_TYPES = {
 
 
 def validate_image_bytes(filename: str, content: bytes) -> tuple[str, str]:
-    """Validate image type, size and signature, returning suffix and MIME type."""
+    """Validate upload type, size and signature, returning suffix and MIME type."""
     suffix = Path(filename).suffix.lower()
     if suffix not in SUPPORTED_IMAGE_TYPES:
         raise ValueError("图片知识库仅支持 PNG、JPEG 和 WebP")
     if not content:
         raise ValueError("图片文件为空")
 
-    max_mb = float(os.getenv("MULTIMODAL_IMAGE_MAX_MB", "10"))
+    max_mb = float(os.getenv("MULTIMODAL_IMAGE_MAX_MB", "50"))
     if len(content) > max_mb * 1024 * 1024:
         raise ValueError(f"图片超过 {max_mb:g} MB 限制")
 
@@ -39,6 +41,63 @@ def validate_image_bytes(filename: str, content: bytes) -> tuple[str, str]:
     if not signature_valid:
         raise ValueError("图片内容与扩展名不匹配")
     return suffix, SUPPORTED_IMAGE_TYPES[suffix]
+
+
+def prepare_image_for_embedding(
+    filename: str,
+    content: bytes,
+) -> tuple[bytes, str, str]:
+    """Validate an upload and compress large images to a cloud-API-safe JPEG."""
+    suffix, mime_type = validate_image_bytes(filename, content)
+    target_mb = float(os.getenv("MULTIMODAL_EMBEDDING_IMAGE_MAX_MB", "5"))
+    target_bytes = max(64 * 1024, int(target_mb * 1024 * 1024))
+    if len(content) <= target_bytes:
+        return content, suffix, mime_type
+
+    try:
+        with Image.open(io.BytesIO(content)) as source:
+            image = ImageOps.exif_transpose(source)
+            max_pixels = int(os.getenv("MULTIMODAL_IMAGE_MAX_PIXELS", "50000000"))
+            if image.width * image.height > max_pixels:
+                raise ValueError(f"图片像素过大，最多允许 {max_pixels:,} 像素")
+
+            if image.mode in {"RGBA", "LA"} or (
+                image.mode == "P" and "transparency" in image.info
+            ):
+                rgba = image.convert("RGBA")
+                background = Image.new("RGB", rgba.size, "white")
+                background.paste(rgba, mask=rgba.getchannel("A"))
+                image = background
+            else:
+                image = image.convert("RGB")
+
+            max_side = int(os.getenv("MULTIMODAL_IMAGE_MAX_SIDE", "4096"))
+            image.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+            for _ in range(8):
+                for quality in (90, 82, 74, 66):
+                    output = io.BytesIO()
+                    image.save(
+                        output,
+                        format="JPEG",
+                        quality=quality,
+                        optimize=True,
+                        progressive=True,
+                    )
+                    optimized = output.getvalue()
+                    if len(optimized) <= target_bytes:
+                        return optimized, ".jpg", "image/jpeg"
+
+                next_size = (
+                    max(10, int(image.width * 0.8)),
+                    max(10, int(image.height * 0.8)),
+                )
+                if next_size == image.size:
+                    break
+                image = image.resize(next_size, Image.Resampling.LANCZOS)
+    except (UnidentifiedImageError, OSError) as error:
+        raise ValueError("图片文件损坏或无法解码") from error
+
+    raise ValueError(f"图片自动压缩后仍超过 {target_mb:g} MB，请降低分辨率后重试")
 
 
 def image_data_url(content: bytes, mime_type: str) -> str:

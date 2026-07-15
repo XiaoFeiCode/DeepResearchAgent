@@ -252,6 +252,8 @@ pandas==3.0.3
     # via
     #   deep-agent-project
     #   pymilvus
+pillow==11.3.0
+    # via deep-agent-project
 propcache==0.5.2
     # via
     #   aiohttp

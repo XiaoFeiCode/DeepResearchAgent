@@ -228,6 +228,8 @@ Copy-Item .env.example .env
 | `MULTIMODAL_EMBEDDING_MODEL` | 跨模态检索模型，默认 `qwen3-vl-embedding` | 使用图片检索时 |
 | `MULTIMODAL_EMBEDDING_DIMENSION` | 图片 Collection 向量维度，默认 1024 | 使用图片检索时 |
 | `MULTIMODAL_SEARCH_MIN_SIMILARITY` | 图片检索最低余弦相似度，默认 0.2 | 否 |
+| `MULTIMODAL_IMAGE_MAX_MB` | 图片知识库原始上传上限，默认 50 MB | 否 |
+| `MULTIMODAL_EMBEDDING_IMAGE_MAX_MB` | 送入向量 API 的图片上限，超出时自动压缩，默认 5 MB | 否 |
 | `VLLM_VISION_MODEL` | 本地 vLLM 使用的 Hugging Face 视觉模型 ID | 本地部署视觉模型时 |
 | `REDIS_CHECKPOINT_URL` | Redis Stack Checkpointer 地址 | 是 |
 | `REDIS_CHECKPOINT_TTL_MINUTES` | 不活跃线程状态的保留时间 | 否 |

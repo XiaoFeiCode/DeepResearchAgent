@@ -15,7 +15,7 @@ from pymilvus import DataType, MilvusClient
 
 from image_knowledge.embedding import (
     MultimodalEmbeddingClient,
-    validate_image_bytes,
+    prepare_image_for_embedding,
 )
 
 
@@ -97,9 +97,12 @@ class ImageKnowledgeStore:
         content: bytes,
         description: str = "",
     ) -> dict[str, Any]:
-        suffix, content_type = validate_image_bytes(filename, content)
+        embedding_content, suffix, content_type = prepare_image_for_embedding(
+            filename,
+            content,
+        )
         normalized_description = description.strip()[:4000]
-        vector = self.embedding.embed_image(content, content_type)
+        vector = self.embedding.embed_image(embedding_content, content_type)
         self.initialize()
         assert self._client is not None
 
@@ -107,7 +110,7 @@ class ImageKnowledgeStore:
         user_dir = self.storage_root / self._user_storage_key(user_id)
         user_dir.mkdir(parents=True, exist_ok=True)
         storage_path = user_dir / f"{image_id}{suffix}"
-        storage_path.write_bytes(content)
+        storage_path.write_bytes(embedding_content)
         created_at = datetime.now(timezone.utc).isoformat()
         record = {
             "id": image_id,
@@ -153,15 +156,18 @@ class ImageKnowledgeStore:
     ) -> list[dict[str, Any]]:
         normalized_query = query_text.strip()
         if image_content is not None:
-            _, mime_type = validate_image_bytes(image_filename, image_content)
+            prepared_content, _, mime_type = prepare_image_for_embedding(
+                image_filename,
+                image_content,
+            )
             if normalized_query:
                 vector = self.embedding.embed_fused(
                     text=normalized_query,
-                    image_content=image_content,
+                    image_content=prepared_content,
                     mime_type=mime_type,
                 )
             else:
-                vector = self.embedding.embed_image(image_content, mime_type)
+                vector = self.embedding.embed_image(prepared_content, mime_type)
         elif normalized_query:
             vector = self.embedding.embed_text(normalized_query)
         else:
