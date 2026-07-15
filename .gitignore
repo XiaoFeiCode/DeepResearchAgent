@@ -18,6 +18,7 @@ env/
 !.env.example
 
 # Runtime state and generated files
+.langgraph_api/
 runtime/
 output/
 updated/

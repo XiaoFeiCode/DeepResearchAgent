@@ -50,7 +50,7 @@ main_system_prompt = main_agent_config["system_prompt"] + """
 4. 安装成功后再委派给对应子智能体；需要确认现有分配时调用 list_agent_skills。
 """
 
-# SQLite checkpointer 会把同一个 thread_id 下的 Agent 状态保存下来。
+# Redis checkpointer 会把同一个 thread_id 下的 Agent 状态保存下来。
 # 用户连续追问时沿用同一个 thread_id；点击“新会话”时前端会生成新的 thread_id。
 project_root = Path(__file__).resolve().parent.parent
 runtime_dir = project_root / "runtime"
@@ -62,7 +62,7 @@ main_agent_lock = asyncio.Lock()
 
 
 async def get_main_agent():
-    """异步初始化主智能体，确保 astream 使用异步版 SQLite checkpointer。"""
+    """异步初始化主智能体，确保 astream 使用异步版 Redis checkpointer。"""
     global main_agent, checkpoint_context, checkpoint_saver
 
     if main_agent is not None:
@@ -101,7 +101,7 @@ async def get_main_agent():
 
 
 async def close_main_agent_resources():
-    """服务关闭时释放异步 SQLite 连接。"""
+    """服务关闭时释放异步 Redis checkpointer 和 Daytona 沙箱资源。"""
     global main_agent, checkpoint_context, checkpoint_saver
     if checkpoint_context is not None:
         await checkpoint_context.__aexit__(None, None, None)

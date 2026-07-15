@@ -1,29 +1,68 @@
 """LangGraph deployment graphs for native DeepAgents async subagents."""
 
-from deepagents import AsyncSubAgent, create_deep_agent
+import shutil
+
+from deepagents import AsyncSubAgent, FilesystemPermission, create_deep_agent
+from deepagents.backends import CompositeBackend, FilesystemBackend, StateBackend
 
 from agent.llm import model
 from agent.load_prompt import main_agent_config
 from agent.subagents.database_query_agent import database_query_agent
 from agent.subagents.internet_sub_agent import internet_sub_agent
 from agent.subagents.rag_sub_agent import rag_sub_agent
+from skills.registry import PROJECT_ROOT, SKILL_ASSIGNMENTS
 
 
-def _build_worker(spec: dict):
-    """Turn an existing inline subagent specification into a deployable graph."""
+def _prepare_worker_skill_source(target_agent: str):
+    """Build an isolated, read-only local skill source for one async worker."""
+    source_root = PROJECT_ROOT / "runtime" / "async_skill_sources" / target_agent
+    if source_root.exists():
+        shutil.rmtree(source_root)
+    source_root.mkdir(parents=True)
+
+    project_skills = PROJECT_ROOT / "skills"
+    for skill_name in SKILL_ASSIGNMENTS[target_agent]:
+        shutil.copytree(
+            project_skills / skill_name,
+            source_root / skill_name,
+        )
+
+    backend = CompositeBackend(
+        default=StateBackend(),
+        routes={
+            "/skills/": FilesystemBackend(
+                root_dir=source_root,
+                virtual_mode=True,
+            )
+        },
+    )
+    return backend
+
+
+def _build_worker(spec: dict, target_agent: str):
+    """Turn an inline subagent specification into a skill-aware deployable graph."""
     return create_deep_agent(
         model=spec.get("model", model),
         tools=spec.get("tools", []),
         system_prompt=spec["system_prompt"],
+        backend=_prepare_worker_skill_source(target_agent),
+        skills=["/skills/"],
+        permissions=[
+            FilesystemPermission(
+                operations=["write"],
+                paths=["/skills/**"],
+                mode="deny",
+            )
+        ],
         name=spec["name"],
     )
 
 
 # These workers are registered independently in langgraph.json. Each async run
 # receives its own thread and state instead of sharing the supervisor context.
-internet_research_graph = _build_worker(internet_sub_agent)
-ragflow_research_graph = _build_worker(rag_sub_agent)
-database_research_graph = _build_worker(database_query_agent)
+internet_research_graph = _build_worker(internet_sub_agent, "internet")
+ragflow_research_graph = _build_worker(rag_sub_agent, "ragflow")
+database_research_graph = _build_worker(database_query_agent, "database")
 
 
 async_subagents = [

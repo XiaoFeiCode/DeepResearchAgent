@@ -77,6 +77,7 @@ RAGFlow 中配置的知识库与专业助手可以被项目中的 RAGFlow 子智
 - **可控服务生命周期**：FastAPI `lifespan` 统一初始化共享服务，关闭时取消并等待 Agent 与 WebSocket 后台任务，随后释放 Redis、Daytona 和事件循环资源。
 - **原生 Agent Skill**：通过 DeepAgents `skills=` 与 `SkillsMiddleware` 按需发现和读取 `SKILL.md`，并为主 Agent、数据库、RAGFlow 和网络子 Agent 隔离不同 Skill。
 - **用户 Skill 安装**：用户可在聊天中提供 GitHub Skill 地址，将通过校验的 Skill 按用户隔离并分配给主 Agent 或指定领域子 Agent。
+- **用户级会话隔离**：MySQL 会话和消息绑定登录用户，所有创建、恢复与列表查询都会校验 `user_id`，阻止跨用户读取相同 `thread_id`。
 
 ## 核心亮点
 - 🧩 多智能体架构：基于 LangGraph / DeepAgents 实现主智能体 + 子智能体协同调度
@@ -164,6 +165,12 @@ deep_agent_project/
 
 后端路由只处理 HTTP/WebSocket 协议适配，具体操作由 `services/` 承担。前端 `App.vue` 保留状态与数据请求，各业务视图拆分到独立组件，便于继续扩展新工具和管理界面。
 
+更多维护说明：
+
+- [项目结构说明](docs/PROJECT_STRUCTURE.md)
+- [记忆设计说明](docs/MEMORY_DESIGN.md)
+- [开发与验证命令](docs/DEVELOPMENT.md)
+
 ## 环境要求
 
 - Python 3.12+
@@ -230,6 +237,7 @@ Copy-Item .env.example .env
 | `RAGFLOW_API_KEY` | RAGFlow API Key | 使用知识库时 |
 | `SKILL_ALLOW_EXECUTABLE_FILES` | 是否允许外部 Skill 携带可执行脚本，默认 `false` | 否 |
 | `GITHUB_TOKEN` | GitHub API Token，用于提高外部 Skill 下载限额 | 否 |
+| `CONVERSATION_LEGACY_USER_ID` | 旧会话表升级时接收历史数据的用户名，默认管理员 | 否 |
 
 不要提交真实的 `.env` 文件。
 
@@ -354,7 +362,7 @@ RBAC 数据表：
 | `document-generation` | 生成 Markdown/PDF 文档 |
 | `long-term-memory` | 跨会话召回或保存用户偏好、规则、策略、模板和历史结论 |
 
-Skill 是智能体的任务说明和决策流程，Tool 是真正执行数据库查询、上传文档或互联网搜索的代码。项目使用 DeepAgents 原生渐进式披露机制：Agent 初始只看到 Skill 的名称、描述和路径，任务匹配后才读取完整 `SKILL.md`。主 Agent 使用路由和文档 Skill；数据库、RAGFlow、网络子 Agent 分别只加载各自的执行 Skill。Daytona 启动会把这些 Skill 同步到隔离的远端来源目录。
+Skill 是智能体的任务说明和决策流程，Tool 是真正执行数据库查询、上传文档或互联网搜索的代码。项目使用 DeepAgents 原生渐进式披露机制：Agent 初始只看到 Skill 的名称、描述和路径，任务匹配后才读取完整 `SKILL.md`。主 Agent 使用路由和文档 Skill；数据库、RAGFlow、网络子 Agent 分别只加载各自的执行 Skill。Daytona 启动会把这些 Skill 同步到隔离的远端来源目录；Agent Protocol 中的异步 Worker 使用独立只读 Skill 来源，避免领域技能互相泄漏。
 
 ### 从 GitHub 安装用户 Skill
 
@@ -421,6 +429,6 @@ npm run build
 - CORS 配置适合本地调试，不建议直接暴露到公网。
 - vLLM 模型服务需要 NVIDIA GPU 和足够显存，也可以通过环境变量连接独立 GPU 服务器。
 - 当前限流为单进程内存实现；多实例部署时应迁移到 Redis 限流。
-- MySQL 当前保存聊天正文但尚未加入用户账号字段；正式多用户版本应增加 `user_id` 并按用户校验会话访问权限。
+- MySQL 会话已按登录用户隔离；旧版表首次启动时会自动补充 `user_id`，历史数据归属由 `CONVERSATION_LEGACY_USER_ID` 控制。
 - RAGFlow、MySQL、Tavily 等外部能力需要单独部署或申请对应服务。
 - `ragflow/` 下的本地知识库原始资料默认被 Git 忽略，请根据数据授权自行准备测试文件。

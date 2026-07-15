@@ -25,13 +25,20 @@ class TaskService:
     def active_count(self) -> int:
         return len(self._tasks)
 
-    def start(
+    async def start(
         self,
         query: str,
         thread_id: str | None = None,
         user_id: str = "anonymous",
     ) -> str:
         task_thread_id = thread_id or str(uuid.uuid4())
+        service = self._conversation_service
+        if service is not None and service.available:
+            await asyncio.to_thread(
+                service.create_conversation,
+                task_thread_id,
+                user_id,
+            )
         task = asyncio.create_task(
             self._run_and_persist(query, task_thread_id, user_id),
             name=f"agent-task-{task_thread_id}",
@@ -41,19 +48,31 @@ class TaskService:
         return task_thread_id
 
     async def _run_and_persist(self, query: str, thread_id: str, user_id: str):
-        await self._save_message(thread_id, "user", query)
+        await self._save_message(thread_id, user_id, "user", query)
         result = await self._runner(query, thread_id, user_id)
         if isinstance(result, str) and result and result != "Done":
             role = "system" if result.startswith("Error:") else "assistant"
-            await self._save_message(thread_id, role, result)
+            await self._save_message(thread_id, user_id, role, result)
         return result
 
-    async def _save_message(self, thread_id: str, role: str, content: str) -> None:
+    async def _save_message(
+        self,
+        thread_id: str,
+        user_id: str,
+        role: str,
+        content: str,
+    ) -> None:
         service = self._conversation_service
         if service is None or not service.available:
             return
         try:
-            await asyncio.to_thread(service.add_message, thread_id, role, content)
+            await asyncio.to_thread(
+                service.add_message,
+                thread_id,
+                user_id,
+                role,
+                content,
+            )
         except Exception:
             logger.exception("Failed to persist %s message for thread %s", role, thread_id)
 

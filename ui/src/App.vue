@@ -146,6 +146,19 @@ const fetchConversationMessages = async (threadId = currentThreadId.value) => {
       timestamp: message.timestamp,
     }))
   } catch (error: any) {
+    if (error.response?.status === 404) {
+      currentThreadId.value = crypto.randomUUID()
+      sessionStorage.setItem(THREAD_STORAGE_KEY, currentThreadId.value)
+      messages.value = []
+      try {
+        await axios.post(`${API_BASE}/api/conversations`, {
+          thread_id: currentThreadId.value,
+        })
+      } catch (createError) {
+        console.error('Failed to create a user-scoped conversation', createError)
+      }
+      return
+    }
     if (error.response?.status !== 503) {
       console.error('Failed to restore conversation history', error)
     }
