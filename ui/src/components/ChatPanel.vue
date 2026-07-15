@@ -82,16 +82,24 @@ const renderMessageContent = (message: Message) => {
   if (!images.length) return renderMarkdown(message.content)
 
   const referencedIds = new Set<string>()
+  const imageSlots: Array<{ marker: string; image: ImageKnowledgeItem }> = []
   const source = message.content.replace(
     /\{\{\s*image:([^}\s]+)\s*\}\}/gi,
     (token, imageId: string) => {
       const image = images.find((item) => item.id === imageId)
       if (!image) return token
       referencedIds.add(image.id)
-      return `\n\n${imageFigureHtml(image)}\n\n`
+      const marker = `INLINE_IMAGE_SLOT_${imageSlots.length}_${image.id}`
+      imageSlots.push({ marker, image })
+      return `\n\n${marker}\n\n`
     },
   )
-  const html = marked.parse(source) as string
+  let html = marked.parse(source) as string
+  for (const slot of imageSlots) {
+    const figure = imageFigureHtml(slot.image)
+    html = html.replace(`<p>${slot.marker}</p>`, figure)
+    html = html.replace(slot.marker, figure)
+  }
   const remaining = images.filter((image) => !referencedIds.has(image.id))
   if (!remaining.length) return html
 
