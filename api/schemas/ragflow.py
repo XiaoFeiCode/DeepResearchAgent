@@ -15,3 +15,10 @@ class RagflowImageSearchRequest(BaseModel):
     dataset_name_or_id: str = Field(min_length=1)
     document_name_or_id: str = Field(default="", max_length=1000)
     limit: int = Field(default=8, ge=1, le=20)
+
+
+class RagflowDatasetCreateRequest(BaseModel):
+    """创建 RAGFlow 知识库时的请求参数。"""
+
+    name: str = Field(min_length=1, max_length=128)
+    description: str = Field(default="", max_length=1000)

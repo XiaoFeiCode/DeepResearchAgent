@@ -24,7 +24,7 @@ from api.context import (
     set_user_context,
 )
 from api.monitor import monitor
-from observability import agent_trace, record_agent_result
+from observability import agent_trace, get_span_identifiers, record_agent_result
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +42,10 @@ async def run_deep_agent(
         user_id=user_id,
     ) as span:
         result = await _execute_deep_agent(task_query, actual_thread_id, user_id)
+        trace_id, span_id = get_span_identifiers(span)
+        if trace_id and span_id:
+            result.metadata["trace_id"] = trace_id
+            result.metadata["span_id"] = span_id
         record_agent_result(span, result.content, result.metadata)
         return result
 

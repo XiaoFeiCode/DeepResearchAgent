@@ -2,7 +2,7 @@
 import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { marked } from 'marked'
 
-import type { AgentStatus, FileItem, ImageKnowledgeItem, Message } from '../types'
+import type { AgentStatus, FileItem, RagflowImage, Message } from '../types'
 import { formatTime, getFileTag } from '../utils/formatters'
 import ExecutionProcess from './ExecutionProcess.vue'
 
@@ -57,7 +57,7 @@ const escapeHtml = (value: string) => value
   .replace(/"/g, '&quot;')
   .replace(/'/g, '&#039;')
 
-const imageFigureHtml = (image: ImageKnowledgeItem) => {
+const imageFigureHtml = (image: RagflowImage) => {
   const title = image.document_name || image.filename || '检索图片'
   const source = image.source === 'ragflow'
     ? `RAGFlow 文档图片${image.page ? ` · 第 ${image.page} 页` : ''}`
@@ -87,7 +87,7 @@ const renderMessageContent = (message: Message) => {
   if (!images.length) return renderMarkdown(message.content)
 
   const referencedIds = new Set<string>()
-  const imageSlots: Array<{ marker: string; image: ImageKnowledgeItem }> = []
+  const imageSlots: Array<{ marker: string; image: RagflowImage }> = []
   const source = message.content.replace(
     /\{\{\s*image:([^}\s]+)\s*\}\}/gi,
     (token, imageId: string) => {

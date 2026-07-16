@@ -1,0 +1,14 @@
+[project]
+name = "omniresearch-evaluation"
+version = "0.1.0"
+description = "OmniResearch 离线自动评测环境。"
+requires-python = ">=3.12"
+dependencies = [
+    "arize-phoenix-client>=2.3.1",
+    "langchain-community==0.3.31",
+    "pydantic-settings>=2.12.0,<3",
+    "ragas==0.4.3",
+]
+
+[tool.uv]
+package = false

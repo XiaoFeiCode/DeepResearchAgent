@@ -1,7 +1,7 @@
 from fastapi import APIRouter, File, Form, HTTPException, Request, Response, Security, UploadFile
 from fastapi.concurrency import run_in_threadpool
 
-from api.schemas import RagflowDocumentRequest, RagflowImageSearchRequest
+from api.schemas import RagflowDatasetCreateRequest, RagflowDocumentRequest, RagflowImageSearchRequest
 from api.security import check_rbac
 from api.services import RagflowService
 from tools.ragflow.base import _format_ragflow_error
@@ -21,6 +21,24 @@ async def list_ragflow_datasets(request: Request, _current_user=Security(check_r
     except Exception as error:
         return {"error": f"获取 RAGFlow 知识库失败: {error}"}
 
+
+@router.post("/datasets")
+async def create_ragflow_dataset(
+    payload: RagflowDatasetCreateRequest,
+    request: Request,
+    _current_user=Security(check_rbac, scopes=["ragflow"]),
+):
+    try:
+        dataset = await run_in_threadpool(
+            _service(request).create_dataset,
+            payload.name,
+            payload.description,
+        )
+        return {"dataset": dataset}
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        return {"error": f"创建 RAGFlow 知识库失败: {error}"}
 
 @router.get("/documents")
 async def list_ragflow_documents(

@@ -196,12 +196,12 @@ class AuthService:
             "researcher": {
                 "name": "研究员",
                 "description": "可以运行任务、查看文件和会话",
-                "scopes": ["task", "files", "image_knowledge", "conversations"],
+                "scopes": ["task", "files", "conversations"],
             },
             "knowledge_manager": {
                 "name": "知识库管理员",
                 "description": "可以管理 RAGFlow、图片知识库和会话文件",
-                "scopes": ["ragflow", "image_knowledge", "files", "conversations"],
+                "scopes": ["ragflow", "files", "conversations"],
             },
             "viewer": {
                 "name": "只读观察者",

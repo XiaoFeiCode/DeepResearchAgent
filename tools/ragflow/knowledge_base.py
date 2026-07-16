@@ -1,11 +1,13 @@
 from langchain_core.tools import tool
 
+from api.monitor import monitor
 from tools.ragflow.base import (
     _find_dataset,
     _format_dataset,
     _format_document,
     _get_id,
     _get_name,
+    _list_all_documents,
     _resolve_file_paths,
     get_ragflow_client,
 )
@@ -30,6 +32,10 @@ def inspect_ragflow_knowledge_base(dataset_name_or_id: str = "") -> str:
 
     dataset_name_or_id 为空时列出全部知识库；不为空时查看指定知识库和其中的文档。
     """
+    monitor.report_tool(
+        tool_name="查看 RAGFlow 知识库状态工具",
+        args={"dataset_name_or_id": dataset_name_or_id},
+    )
     try:
         client = get_ragflow_client()
 
@@ -45,7 +51,7 @@ def inspect_ragflow_knowledge_base(dataset_name_or_id: str = "") -> str:
         if dataset is None:
             return f"未找到知识库: {dataset_name_or_id}"
 
-        documents = dataset.list_documents(page=1, page_size=1000)
+        documents = _list_all_documents(dataset)
         lines = ["知识库信息:", _format_dataset(dataset)]
         if documents:
             lines.append("文档列表:")
@@ -77,6 +83,16 @@ def setup_ragflow_knowledge_base(
 
     file_paths 支持用逗号、分号或换行分隔多个文件路径。
     """
+    monitor.report_tool(
+        tool_name="配置 RAGFlow 知识库工具",
+        args={
+            "dataset_name": dataset_name,
+            "description": description,
+            "file_paths": file_paths,
+            "parse_after_upload": parse_after_upload,
+            "embedding_model": embedding_model,
+        },
+    )
     try:
         if not dataset_name.strip():
             return "知识库名称不能为空。"
@@ -122,7 +138,7 @@ def setup_ragflow_knowledge_base(
                 parse_status = dataset.parse_documents(document_ids)
                 lines.append(f"解析状态: {parse_status}")
 
-        documents = dataset.list_documents(page=1, page_size=1000)
+        documents = _list_all_documents(dataset)
         if documents:
             lines.append("当前知识库文档:")
             lines.extend(_format_document(document) for document in documents)

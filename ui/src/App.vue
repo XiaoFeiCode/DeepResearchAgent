@@ -15,17 +15,15 @@ import {
   taskApi,
 } from './api/client'
 import ChatPanel from './components/ChatPanel.vue'
+import KnowledgeBasePage from './components/KnowledgeBasePage.vue'
 import WorkspaceDrawer from './components/WorkspaceDrawer.vue'
 import WorkspaceRail from './components/WorkspaceRail.vue'
 import { useImageAssets } from './composables/useImageAssets'
-import { useImageKnowledge } from './composables/useImageKnowledge'
 import { useRagflowKnowledge } from './composables/useRagflowKnowledge'
 import type {
   AgentStatus,
   ConversationSummary,
-  DrawerMode,
   FileItem,
-  ImageKnowledgeItem,
   Message,
   MessageAttachment,
 } from './types'
@@ -51,7 +49,7 @@ const currentThreadId = ref(getInitialThreadId())
 const currentSessionPath = ref('')
 const currentSessionUrl = ref('')
 const isSidebarOpen = ref(false)
-const drawerMode = ref<DrawerMode>('files')
+const activeView = ref<'chat' | 'knowledge'>('chat')
 const fileList = ref<FileItem[]>([])
 const selectedFiles = ref<File[]>([])
 const authToken = ref(localStorage.getItem(AUTH_STORAGE_KEY) || '')
@@ -77,11 +75,15 @@ const {
   datasets: ragflowDatasets,
   deleteDocument: deleteKnowledgeDocument,
   documents: ragflowDocuments,
+  createDataset,
+  creating: ragflowCreating,
   error: ragflowError,
   fetchDatasets: fetchRagflowDatasets,
   handleFileChange: handleKbFileChange,
   loading: ragflowLoading,
   message: ragflowMessage,
+  newDatasetDescription,
+  newDatasetName,
   parseDocument: parseKnowledgeDocument,
   selectedDataset,
   selectedDatasetId,
@@ -91,19 +93,6 @@ const {
   uploadFiles: uploadKnowledgeFiles,
 } = useRagflowKnowledge()
 
-const {
-  deleteImage: deleteImageKnowledge,
-  description: imageDescription,
-  error: imageKnowledgeError,
-  fetchImages: fetchImageKnowledge,
-  handleFileChange: handleImageKnowledgeFileChange,
-  items: imageKnowledgeItems,
-  loading: imageKnowledgeLoading,
-  message: imageKnowledgeMessage,
-  selectedFiles: selectedImageFiles,
-  uploading: imageKnowledgeUploading,
-  uploadImages: uploadImageKnowledge,
-} = useImageKnowledge(imageAssets)
 
 const isAuthenticated = computed(() => authToken.value.length > 0)
 const canSend = computed(() => status.value !== 'running' && (inputQuery.value.trim().length > 0 || selectedFiles.value.length > 0))
@@ -162,8 +151,6 @@ const logout = () => {
   conversations.value = []
   fileList.value = []
   selectedFiles.value = []
-  imageKnowledgeItems.value = []
-  selectedImageFiles.value = []
   currentSessionPath.value = ''
   currentSessionUrl.value = ''
   status.value = 'idle'
@@ -212,6 +199,7 @@ const fetchConversations = async () => {
 const selectConversation = async (threadId: string) => {
   if (status.value === 'running' || threadId === currentThreadId.value) return
 
+  activeView.value = 'chat'
   currentThreadId.value = threadId
   sessionStorage.setItem(THREAD_STORAGE_KEY, threadId)
   messages.value = []
@@ -267,22 +255,16 @@ const fetchFiles = async () => {
 }
 
 const openFilesDrawer = () => {
-  drawerMode.value = 'files'
   isSidebarOpen.value = true
   fetchFiles()
 }
 
 const openKnowledgeDrawer = () => {
-  drawerMode.value = 'knowledge'
-  isSidebarOpen.value = true
+  activeView.value = 'knowledge'
+  isSidebarOpen.value = false
   fetchRagflowDatasets()
 }
 
-const openImageKnowledgeDrawer = () => {
-  drawerMode.value = 'images'
-  isSidebarOpen.value = true
-  fetchImageKnowledge()
-}
 
 const handleSocketMessage = (payload: any) => {
   const { type, event, message, data: eventData } = payload
@@ -332,7 +314,7 @@ const handleSocketMessage = (payload: any) => {
   }
 
   if (event === 'image_search_result' && lastAiMessage) {
-    const images = (eventData.images ?? []) as ImageKnowledgeItem[]
+    const images = eventData.images ?? []
     rememberImageMetadata(images)
     lastAiMessage.images = images
     void hydrateImageItems(images).then((hydrated) => {
@@ -466,6 +448,7 @@ const downloadFile = async (file: FileItem) => {
 }
 
 const startNewChat = async () => {
+  activeView.value = 'chat'
   currentThreadId.value = crypto.randomUUID()
   sessionStorage.setItem(THREAD_STORAGE_KEY, currentThreadId.value)
   messages.value = []
@@ -526,76 +509,77 @@ onBeforeUnmount(() => {
       :file-count="fileList.length"
       :conversations="conversations"
       :user-name="authUser || loginUsername"
+      :active-view="activeView"
       @new-chat="startNewChat"
       @open-files="openFilesDrawer"
       @open-knowledge="openKnowledgeDrawer"
-      @open-images="openImageKnowledgeDrawer"
       @select-conversation="selectConversation"
       @delete-conversation="deleteConversation"
       @logout="logout"
     />
 
     <main class="conversation-pane">
-      <header class="topbar">
-        <div class="conversation-title">
-          <h1>OmniResearch</h1>
-          <span class="run-status" :class="status">{{ status === 'running' ? '执行中' : '就绪' }}</span>
-        </div>
-        <div class="mobile-toolbar">
-          <button type="button" title="文件" aria-label="文件" @click="openFilesDrawer">文件</button>
-          <button type="button" title="知识库" aria-label="知识库" @click="openKnowledgeDrawer">知识库</button>
-          <button type="button" title="新对话" aria-label="新对话" :disabled="status === 'running'" @click="startNewChat">新对话</button>
-        </div>
-      </header>
+      <template v-if="activeView === 'chat'">
+        <header class="topbar">
+          <div class="conversation-title">
+            <h1>OmniResearch</h1>
+            <span class="run-status" :class="status">{{ status === 'running' ? '执行中' : '就绪' }}</span>
+          </div>
+          <div class="mobile-toolbar">
+            <button type="button" title="文件" aria-label="文件" @click="openFilesDrawer">文件</button>
+            <button type="button" title="知识库" aria-label="知识库" @click="openKnowledgeDrawer">知识库</button>
+            <button type="button" title="新对话" aria-label="新对话" :disabled="status === 'running'" @click="startNewChat">新对话</button>
+          </div>
+        </header>
 
-      <ChatPanel
-        :messages="messages"
-        :status="status"
-        :input-query="inputQuery"
-        :selected-files="selectedFiles"
-        :can-send="canSend"
-        @update:input-query="inputQuery = $event"
-        @send="sendMessage"
-        @file-change="handleFileChange"
-        @remove-file="selectedFiles.splice($event, 1)"
-        @download-file="downloadFile"
+        <ChatPanel
+          :messages="messages"
+          :status="status"
+          :input-query="inputQuery"
+          :selected-files="selectedFiles"
+          :can-send="canSend"
+          @update:input-query="inputQuery = $event"
+          @send="sendMessage"
+          @file-change="handleFileChange"
+          @remove-file="selectedFiles.splice($event, 1)"
+          @download-file="downloadFile"
+        />
+      </template>
+
+      <KnowledgeBasePage
+        v-else
+        :datasets="ragflowDatasets"
+        :documents="ragflowDocuments"
+        :selected-dataset="selectedDataset"
+        :selected-dataset-id="selectedDatasetId"
+        :selected-files="selectedKbFiles"
+        :loading="ragflowLoading"
+        :uploading="ragflowUploading"
+        :creating="ragflowCreating"
+        :message="ragflowMessage"
+        :error="ragflowError"
+        :new-dataset-name="newDatasetName"
+        :new-dataset-description="newDatasetDescription"
+        @back="activeView = 'chat'"
+        @refresh="fetchRagflowDatasets"
+        @create="createDataset"
+        @update:new-dataset-name="newDatasetName = $event"
+        @update:new-dataset-description="newDatasetDescription = $event"
+        @select="selectRagflowDataset"
+        @file-change="handleKbFileChange"
+        @remove-file="selectedKbFiles.splice($event, 1)"
+        @upload="uploadKnowledgeFiles"
+        @parse="parseKnowledgeDocument"
+        @delete="deleteKnowledgeDocument"
       />
     </main>
 
     <WorkspaceDrawer
       v-if="isSidebarOpen"
-      :mode="drawerMode"
       :files="fileList"
-      :datasets="ragflowDatasets"
-      :documents="ragflowDocuments"
-      :selected-dataset="selectedDataset"
-      :selected-dataset-id="selectedDatasetId"
-      :selected-kb-files="selectedKbFiles"
-      :ragflow-loading="ragflowLoading"
-      :ragflow-uploading="ragflowUploading"
-      :ragflow-message="ragflowMessage"
-      :ragflow-error="ragflowError"
-      :image-knowledge-items="imageKnowledgeItems"
-      :selected-image-files="selectedImageFiles"
-      :image-description="imageDescription"
-      :image-knowledge-loading="imageKnowledgeLoading"
-      :image-knowledge-uploading="imageKnowledgeUploading"
-      :image-knowledge-message="imageKnowledgeMessage"
-      :image-knowledge-error="imageKnowledgeError"
       @close="isSidebarOpen = false"
-      @refresh="drawerMode === 'knowledge' ? fetchRagflowDatasets() : drawerMode === 'images' ? fetchImageKnowledge() : fetchFiles()"
+      @refresh="fetchFiles"
       @download-file="downloadFile"
-      @select-dataset="selectRagflowDataset"
-      @kb-file-change="handleKbFileChange"
-      @remove-kb-file="selectedKbFiles.splice($event, 1)"
-      @upload-kb-files="uploadKnowledgeFiles"
-      @parse-document="parseKnowledgeDocument"
-      @delete-document="deleteKnowledgeDocument"
-      @update:image-description="imageDescription = $event"
-      @image-file-change="handleImageKnowledgeFileChange"
-      @remove-image-file="selectedImageFiles.splice($event, 1)"
-      @upload-images="uploadImageKnowledge"
-      @delete-image="deleteImageKnowledge"
     />
   </div>
 </template>

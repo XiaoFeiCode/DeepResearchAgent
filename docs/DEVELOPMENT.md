@@ -44,9 +44,9 @@ uv run langgraph dev
 
 ```powershell
 uv pip check
-uv run python -m compileall -q agent agent_memory api core image_knowledge observability skills tools tests
-uvx ruff check agent agent_memory api core image_knowledge observability skills tools tests --select F
-uvx vulture agent agent_memory api core image_knowledge observability skills tools --min-confidence 80
+uv run python -m compileall -q agent agent_memory api core observability skills tools tests
+uvx ruff check agent agent_memory api core observability skills tools tests --select F
+uvx vulture agent agent_memory api core observability skills tools --min-confidence 80
 uv run python -m unittest discover -s tests -v
 cd ui
 npm run build

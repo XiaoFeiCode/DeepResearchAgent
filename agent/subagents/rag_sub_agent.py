@@ -11,6 +11,7 @@ from tools.ragflow import (
     setup_ragflow_knowledge_base,
     upload_ragflow_documents,
     search_ragflow_document_images,
+    search_uploaded_image_in_ragflow,
 )
 from tools.multimodal import analyze_image
 from skills.registry import RAGFLOW_AGENT_SKILLS
@@ -35,6 +36,7 @@ rag_sub_agent = {
         setup_ragflow_knowledge_base,
         analyze_image,
         search_ragflow_document_images,
+        search_uploaded_image_in_ragflow,
     ],
     "skills": RAGFLOW_AGENT_SKILLS,
 }

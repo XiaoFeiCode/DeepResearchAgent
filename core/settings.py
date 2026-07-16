@@ -36,28 +36,11 @@ class AppSettings(BaseSettings):
     vision_model: str | None = None
     vision_max_image_mb: float = Field(default=10, gt=0)
     vision_request_timeout_seconds: float = Field(default=90, gt=0, le=600)
-    multimodal_embedding_base_url: str = (
-        "https://dashscope.aliyuncs.com/api/v1/services/embeddings/"
-        "multimodal-embedding/multimodal-embedding"
-    )
-    multimodal_embedding_api_key: str | None = None
-    multimodal_embedding_model: str = "qwen3-vl-embedding"
-    multimodal_embedding_dimension: int = Field(default=1024, ge=1)
-    multimodal_embedding_timeout_seconds: float = Field(default=60, gt=0, le=600)
-    multimodal_embedding_instruct: str = (
-        "Retrieve semantically similar knowledge-base images for this query."
-    )
-    multimodal_image_max_mb: float = Field(default=50, gt=0)
-    multimodal_embedding_image_max_mb: float = Field(default=5, gt=0)
-    multimodal_image_max_pixels: int = Field(default=50_000_000, ge=1)
-    multimodal_image_max_side: int = Field(default=4096, ge=64)
-    multimodal_search_min_similarity: float = Field(default=0.2, ge=-1, le=1)
 
     # 长期记忆、Embedding 和 Reranker 配置
     milvus_uri: str = "http://127.0.0.1:19531"
     milvus_token: str | None = None
     milvus_memory_collection: str = "agent_long_term_memory"
-    milvus_image_collection: str = "multimodal_image_knowledge"
     memory_vector_dimension: int = Field(default=512, ge=1)
     memory_min_similarity: float = Field(default=0.12, ge=-1, le=1)
     memory_embedding_provider: Literal["api", "vllm", "hash"] = "api"
@@ -118,6 +101,21 @@ class AppSettings(BaseSettings):
     phoenix_export_timeout_seconds: float = Field(default=10.0, gt=0, le=300)
     app_environment: str = "development"
 
+    # 离线自动评测配置
+    evaluation_dataset_path: str = "evaluation/datasets/cases.jsonl"
+    evaluation_output_dir: str = "output/evaluation"
+    evaluation_user_id: str = "evaluation"
+    evaluation_llm_model: str | None = None
+    evaluation_llm_base_url: str | None = None
+    evaluation_llm_api_key: str | None = None
+    evaluation_llm_max_tokens: int = Field(default=8192, ge=256, le=65536)
+    evaluation_embedding_model: str | None = None
+    evaluation_embedding_base_url: str | None = None
+    evaluation_embedding_api_key: str | None = None
+    evaluation_phoenix_base_url: str = "http://127.0.0.1:6006"
+    evaluation_phoenix_api_key: str | None = None
+    evaluation_publish_to_phoenix: bool = False
+
     # API、联网搜索、Skill 和文档配置
     api_auth_enabled: bool = True
     api_auth_secret: str = "deep-agent-dev-secret-change-me"
@@ -136,7 +134,6 @@ class AppSettings(BaseSettings):
     @field_validator(
         "openai_base_url",
         "vision_base_url",
-        "multimodal_embedding_base_url",
         "memory_embedding_base_url",
         "memory_reranker_endpoint",
         "vllm_embedding_base_url",
@@ -144,6 +141,9 @@ class AppSettings(BaseSettings):
         "ragflow_api_url",
         "daytona_api_url",
         "phoenix_collector_endpoint",
+        "evaluation_llm_base_url",
+        "evaluation_embedding_base_url",
+        "evaluation_phoenix_base_url",
     )
     @classmethod
     def validate_http_url(cls, value: str | None) -> str | None:
@@ -164,7 +164,15 @@ class AppSettings(BaseSettings):
             raise ValueError("REDIS_CHECKPOINT_URL 必须使用 redis:// 或 rediss://")
         return normalized
 
-    @field_validator("llm_model", "mysql_host", "phoenix_project_name", "app_environment")
+    @field_validator(
+        "llm_model",
+        "mysql_host",
+        "phoenix_project_name",
+        "app_environment",
+        "evaluation_dataset_path",
+        "evaluation_output_dir",
+        "evaluation_user_id",
+    )
     @classmethod
     def validate_non_empty(cls, value: str) -> str:
         """拒绝关键名称配置为空字符串。"""
@@ -178,6 +186,31 @@ class AppSettings(BaseSettings):
         if not self.openai_base_url or not self.openai_api_key:
             raise ValueError("未配置 OPENAI_BASE_URL 或 OPENAI_API_KEY")
         return self.llm_model, self.openai_base_url, self.openai_api_key
+
+    def evaluation_llm_credentials(self) -> tuple[str, str, str]:
+        """返回评测裁判模型配置，未单独配置时复用主模型。"""
+        model = self.evaluation_llm_model or self.llm_model
+        base_url = self.evaluation_llm_base_url or self.openai_base_url
+        api_key = self.evaluation_llm_api_key or self.openai_api_key
+        if not base_url or not api_key:
+            raise ValueError(
+                "未配置 EVALUATION_LLM_BASE_URL/EVALUATION_LLM_API_KEY，"
+                "且无法复用主模型配置"
+            )
+        return model, base_url, api_key
+
+    def evaluation_embedding_credentials(self) -> tuple[str, str, str] | None:
+        """返回回答相关性评测使用的 Embedding；未配置时跳过该指标。"""
+        model = self.evaluation_embedding_model or self.memory_embedding_model
+        base_url = self.evaluation_embedding_base_url or self.memory_embedding_base_url
+        api_key = (
+            self.evaluation_embedding_api_key
+            or self.memory_embedding_api_key
+            or self.dashscope_api_key
+        )
+        if not model or not base_url or not api_key:
+            return None
+        return model, base_url, api_key
 
     def require_vision_credentials(self) -> tuple[str, str, str]:
         """解析视觉模型配置，并允许复用主模型服务。"""
@@ -193,20 +226,6 @@ class AppSettings(BaseSettings):
             else:
                 raise ValueError("未配置 VISION_API_KEY、DASHSCOPE_API_KEY 或 OPENAI_API_KEY")
         return self.vision_model, base_url, api_key
-
-    def require_multimodal_embedding_api_key(self) -> str:
-        """返回跨模态向量服务可复用的 API 密钥。"""
-        api_key = (
-            self.multimodal_embedding_api_key
-            or self.vision_api_key
-            or self.dashscope_api_key
-        )
-        if not api_key:
-            raise ValueError(
-                "未配置 MULTIMODAL_EMBEDDING_API_KEY、VISION_API_KEY "
-                "或 DASHSCOPE_API_KEY"
-            )
-        return api_key
 
     def memory_embedding_api_key_value(self) -> str:
         """返回长期记忆向量服务使用的 API 密钥。"""

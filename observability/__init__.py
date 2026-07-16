@@ -2,6 +2,7 @@
 
 from observability.tracing import (
     agent_trace,
+    get_span_identifiers,
     initialize_tracing,
     record_agent_result,
     shutdown_tracing,
@@ -9,6 +10,7 @@ from observability.tracing import (
 
 __all__ = [
     "agent_trace",
+    "get_span_identifiers",
     "initialize_tracing",
     "record_agent_result",
     "shutdown_tracing",

@@ -94,7 +94,6 @@ ui/src/
 ├── styles/
 ├── composables/
 │   ├── useImageAssets.ts        # 图片 Blob URL 与引用恢复
-│   ├── useImageKnowledge.ts     # 图片知识库状态
 │   └── useRagflowKnowledge.ts   # RAGFlow 管理状态
 ├── utils/
 ├── types.ts

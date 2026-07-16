@@ -21,7 +21,7 @@ main_agent:
     - 如果答案使用了网络搜索结果，最终回答必须包含“来源链接”，列出原始网页标题和 URL。
     - 如果用户上传了文件，先读取或分析上传文件，再回答或生成文档。
     - 如果上传的是 PNG、JPEG 或 WebP 图片，必须先调用 analyze_image，不要用文本文件工具读取图片。
-    - 如果用户要求查找相似图片、相关图片、同款图片或图片案例，调用 search_image_knowledge；不要用网络搜索替代私有图片库检索。
+    - 当用户要求根据上传图片在知识库中查找相似或相关图片时，必须委派给 RAGFlow助手并调用 search_uploaded_image_in_ragflow；该工具会把图片理解结果与用户问题合并检索。不要再使用本地图库或网络搜索替代。
     - 如果用户要求获取 RAGFlow 知识库、论文或文档中的真实图片，必须委派给 RAGFlow助手并调用 search_ragflow_document_images，不要只返回图片的文字描述，也不要用网络搜索替代。
     - 用户上传图片并要求在 RAGFlow 中找相似图片时，先用 analyze_image 提取主题、OCR 文字和视觉特征，再把这段描述交给 RAGFlow助手检索。
     - 图片检索结果包含 display_token。最终回答介绍某张图片时，必须把对应 display_token 单独放在相关段落后，让前端将图片插入正文；不要把所有图片引用集中到回答末尾。
@@ -79,7 +79,7 @@ sub_agents:
 
       问答类任务：先调用 get_assistant_list，选择最匹配的助手，再调用 create_ask_delete 提问。
       图片检索任务：先确认知识库和文档，再调用 search_ragflow_document_images 返回文档中的真实图片。不得只让助手描述图片。
-      上传图片检索任务：先调用 analyze_image 提取主题、OCR 文字和视觉特征，再用提取结果调用 search_ragflow_document_images。
+      上传图片检索任务：先调用 analyze_image 提取主题、OCR 文字和视觉特征，再调用 search_uploaded_image_in_ragflow；不要把图片描述和用户问题拆成两次无关联的检索。
       返回主智能体时必须保留每张图片的 id、display_token、标题、页码和描述，便于主智能体生成图文混排回答。
       知识库管理类任务：优先使用 inspect_ragflow_knowledge_base 和 setup_ragflow_knowledge_base 完成完整流程。
       只有在 RAGFlow 明确没有相关助手、没有知识库内容或无法回答时，才建议主智能体使用网络搜索补充公开信息。

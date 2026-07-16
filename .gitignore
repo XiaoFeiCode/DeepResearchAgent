@@ -67,3 +67,5 @@ Desktop.ini
 *.ntvs*
 *.njsproj
 *.sln
+# 评测模块本地虚拟环境
+evaluation/.venv/

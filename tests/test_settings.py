@@ -51,6 +51,30 @@ class SettingsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "DAYTONA_API_KEY"):
             settings.require_daytona_api_key()
 
+    def test_evaluation_models_fall_back_to_main_model_configuration(self):
+        settings = AppSettings(
+            _env_file=None,
+            llm_model="judge-model",
+            openai_base_url="https://model.example.com/v1",
+            openai_api_key="secret",
+            memory_embedding_model="embedding-model",
+            memory_embedding_base_url="https://embedding.example.com/v1",
+            memory_embedding_api_key="embedding-secret",
+        )
+
+        self.assertEqual(
+            settings.evaluation_llm_credentials(),
+            ("judge-model", "https://model.example.com/v1", "secret"),
+        )
+        self.assertEqual(
+            settings.evaluation_embedding_credentials(),
+            (
+                "embedding-model",
+                "https://embedding.example.com/v1",
+                "embedding-secret",
+            ),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

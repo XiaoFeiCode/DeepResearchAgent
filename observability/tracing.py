@@ -185,3 +185,13 @@ def record_agent_result(
         span.set_status(Status(StatusCode.ERROR, content[:500]))
     else:
         span.set_status(Status(StatusCode.OK))
+
+
+def get_span_identifiers(span: Span | None) -> tuple[str | None, str | None]:
+    """返回 Phoenix 可识别的 Trace ID 和 Span ID。"""
+    if span is None:
+        return None, None
+    context = span.get_span_context()
+    if not context.is_valid:
+        return None, None
+    return f"{context.trace_id:032x}", f"{context.span_id:016x}"

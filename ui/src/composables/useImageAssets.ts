@@ -1,26 +1,30 @@
-import type { ImageKnowledgeItem, Message, MessageAttachment } from '../types'
-import { imageKnowledgeApi } from '../api/client'
+import type { RagflowImage, Message, MessageAttachment } from '../types'
+import { apiClient } from '../api/client'
 
 const IMAGE_TOKEN_PATTERN = /\{\{\s*image:([^}\s]+)\s*\}\}/gi
 
 export const useImageAssets = () => {
   const objectUrls = new Map<string, string>()
-  const metadataCache = new Map<string, ImageKnowledgeItem>()
+  const metadataCache = new Map<string, RagflowImage>()
 
+  const fetchContent = async (contentUrl: string): Promise<Blob> => {
+    const response = await apiClient.get(contentUrl, { responseType: "blob" })
+    return response.data as Blob
+  }
   const attachmentCacheKey = (attachment: MessageAttachment) => (
     `attachment:${attachment.content_url}`
   )
 
-  const rememberImageMetadata = (images: ImageKnowledgeItem[]) => {
+  const rememberImageMetadata = (images: RagflowImage[]) => {
     for (const image of images) metadataCache.set(image.id, image)
   }
 
-  const hydrateImageItem = async (image: ImageKnowledgeItem): Promise<ImageKnowledgeItem> => {
+  const hydrateImageItem = async (image: RagflowImage): Promise<RagflowImage> => {
     const cachedUrl = objectUrls.get(image.id)
     if (cachedUrl) return { ...image, previewUrl: cachedUrl }
 
     try {
-      const previewUrl = URL.createObjectURL(await imageKnowledgeApi.content(image.content_url))
+      const previewUrl = URL.createObjectURL(await fetchContent(image.content_url))
       objectUrls.set(image.id, previewUrl)
       return { ...image, previewUrl }
     } catch (error) {
@@ -29,7 +33,7 @@ export const useImageAssets = () => {
     }
   }
 
-  const hydrateImageItems = (images: ImageKnowledgeItem[]) => (
+  const hydrateImageItems = (images: RagflowImage[]) => (
     Promise.all(images.map(hydrateImageItem))
   )
 
@@ -45,22 +49,6 @@ export const useImageAssets = () => {
   const resolveReferencedImages = async (messages: Message[]) => {
     for (const message of messages) rememberImageMetadata(message.images ?? [])
 
-    const missingIds = new Set<string>()
-    for (const message of messages) {
-      const attachedIds = new Set((message.images ?? []).map((image) => image.id))
-      for (const imageId of referencedImageIds(message.content)) {
-        if (!attachedIds.has(imageId) && !metadataCache.has(imageId)) missingIds.add(imageId)
-      }
-    }
-
-    if (missingIds.size) {
-      try {
-        const data = await imageKnowledgeApi.list(1000)
-        rememberImageMetadata(data.images ?? [])
-      } catch (error) {
-        console.error('补全回答引用图片失败', error)
-      }
-    }
 
     for (const message of messages) {
       const images = [...(message.images ?? [])]
@@ -88,7 +76,7 @@ export const useImageAssets = () => {
 
     try {
       const previewUrl = URL.createObjectURL(
-        await imageKnowledgeApi.content(attachment.content_url),
+        await fetchContent(attachment.content_url),
       )
       objectUrls.set(cacheKey, previewUrl)
       return { ...attachment, previewUrl }

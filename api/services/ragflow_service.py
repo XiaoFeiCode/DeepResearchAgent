@@ -12,6 +12,7 @@ from tools.ragflow.base import (
     _get_id,
     _get_name,
     _get_value,
+    _list_all_documents,
     get_ragflow_client,
 )
 
@@ -103,15 +104,54 @@ def _caption_priority(chunk: dict) -> int:
     return 1 if _is_visual_chunk(chunk) else 0
 
 
+def _list_document_chunks(client, dataset_id: str, document_id: str) -> list[dict]:
+    """按新版 RAGFlow 的每页上限分页读取文档 Chunk。"""
+    chunks: list[dict] = []
+    page = 1
+    page_size = 100
+    while True:
+        response = requests.get(
+            f"{client.api_url}/datasets/{dataset_id}/documents/{document_id}/chunks",
+            headers=client.authorization_header,
+            params={"page": page, "page_size": page_size},
+            timeout=60,
+        )
+        data = _response_data(response, "读取 RAGFlow 文档 Chunk")
+        batch = data.get("chunks", [])
+        if not isinstance(batch, list):
+            raise RuntimeError("RAGFlow 文档 Chunk 返回格式异常")
+        chunks.extend(item for item in batch if isinstance(item, dict))
+        if len(batch) < page_size:
+            return chunks
+        page += 1
+
 def _fetch_ragflow_image(client, image_id: str) -> tuple[bytes, str]:
-    api_root = client.api_url.removesuffix("/api/v1")
-    response = requests.get(
-        f"{api_root}/v1/document/image/{quote(image_id, safe='')}",
-        headers=client.authorization_header,
-        timeout=30,
-    )
-    if response.status_code >= 400:
-        raise LookupError(f"RAGFlow 图片不存在（HTTP {response.status_code}）")
+    """读取 RAGFlow 文档解析出的原始图片，并兼容新旧服务端路由。"""
+    encoded_image_id = quote(image_id, safe="")
+    api_url = client.api_url.rstrip("/")
+    api_root = api_url.removesuffix("/api/v1")
+    image_urls = [
+        # RAGFlow 0.22+ 使用复数 documents/images 路由。
+        f"{api_url}/documents/images/{encoded_image_id}",
+        # 兼容部分旧版本的图片读取路径。
+        f"{api_root}/v1/document/image/{encoded_image_id}",
+    ]
+
+    response = None
+    for image_url in image_urls:
+        candidate = requests.get(
+            image_url,
+            headers=client.authorization_header,
+            timeout=30,
+        )
+        if candidate.status_code < 400:
+            response = candidate
+            break
+        response = candidate
+
+    if response is None or response.status_code >= 400:
+        status_code = response.status_code if response is not None else "unknown"
+        raise LookupError(f"RAGFlow 图片不存在（HTTP {status_code}）")
     if not response.content:
         raise LookupError("RAGFlow 返回了空图片")
     if len(response.content) > _MAX_RAGFLOW_IMAGE_BYTES:
@@ -121,7 +161,6 @@ def _fetch_ragflow_image(client, image_id: str) -> tuple[bytes, str]:
         response.headers.get("content-type", ""),
     )
 
-
 class RagflowService:
     """封装 RAGFlow SDK 的同步调用，路由层负责放入线程池执行。"""
 
@@ -129,9 +168,19 @@ class RagflowService:
         datasets = get_ragflow_client().list_datasets(page=1, page_size=100)
         return [dataset_payload(dataset) for dataset in datasets]
 
+    def create_dataset(self, name: str, description: str = "") -> dict:
+        """创建 RAGFlow 知识库，嵌入模型沿用租户已配置的默认模型。"""
+        normalized_name = name.strip()
+        if not normalized_name:
+            raise ValueError("知识库名称不能为空")
+        dataset = get_ragflow_client().create_dataset(
+            name=normalized_name,
+            description=description.strip() or None,
+        )
+        return dataset_payload(dataset)
     def list_documents(self, dataset_name_or_id: str) -> dict:
         dataset = self._require_dataset(dataset_name_or_id)
-        documents = dataset.list_documents(page=1, page_size=1000)
+        documents = _list_all_documents(dataset)
         return {
             "dataset": dataset_payload(dataset),
             "documents": [document_payload(document) for document in documents],
@@ -202,7 +251,7 @@ class RagflowService:
             raise ValueError("图片检索问题不能为空")
 
         dataset = self._require_dataset(dataset_name_or_id)
-        documents = dataset.list_documents(page=1, page_size=1000)
+        documents = _list_all_documents(dataset)
         document_by_id = {_get_id(item): item for item in documents}
         document_ids: list[str] = []
 
@@ -260,14 +309,11 @@ class RagflowService:
             scan_document_ids = [_get_id(item) for item in documents[:5] if _get_id(item)]
         visual_chunks: list[dict] = []
         for document_id in scan_document_ids:
-            chunk_response = requests.get(
-                f"{client.api_url}/datasets/{_get_id(dataset)}/documents/{document_id}/chunks",
-                headers=client.authorization_header,
-                params={"page": 1, "page_size": 1000},
-                timeout=60,
-            )
-            chunk_data = _response_data(chunk_response, "读取 RAGFlow 文档 Chunk")
-            for chunk in chunk_data.get("chunks", []):
+            for chunk in _list_document_chunks(
+                client,
+                _get_id(dataset),
+                document_id,
+            ):
                 if not chunk.get("image_id") or not _is_visual_chunk(chunk):
                     continue
                 enriched = dict(chunk)

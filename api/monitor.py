@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import inspect
 import logging
 from concurrent.futures import Future
 from typing import Any
@@ -7,6 +8,7 @@ from typing import Any
 from fastapi import WebSocket
 
 from api.context import get_thread_context
+from evaluation.capture import record_monitor_payload
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +44,9 @@ class ToolMonitor:
             "timestamp": datetime.datetime.now().isoformat(),
         }
 
+        # 离线评测开启时保留同一份事件；普通请求中该函数是空操作。
+        record_monitor_payload(payload)
+
         thread_id = get_thread_context()
         if self.websocket_manager and thread_id:
             self.websocket_manager.publish(thread_id, payload)
@@ -54,10 +59,16 @@ class ToolMonitor:
         args: dict[str, Any] | None = None,
     ) -> None:
         """报告工具开始执行。"""
+        caller = inspect.currentframe().f_back
+        tool_key = caller.f_code.co_name if caller is not None else tool_name
         self._emit(
             "tool_start",
             f"开始执行工具: {tool_name}",
-            {"tool_name": tool_name, "args": args or {}},
+            {
+                "tool_name": tool_name,
+                "tool_key": tool_key,
+                "args": args or {},
+            },
         )
 
     def report_assistant(

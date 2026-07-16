@@ -7,13 +7,13 @@ defineProps<{
   fileCount: number
   conversations: ConversationSummary[]
   userName: string
+  activeView: 'chat' | 'knowledge'
 }>()
 
 const emit = defineEmits<{
   'new-chat': []
   'open-files': []
   'open-knowledge': []
-  'open-images': []
   'select-conversation': [threadId: string]
   'delete-conversation': [conversation: ConversationSummary]
   logout: []
@@ -44,13 +44,9 @@ const emit = defineEmits<{
         会话文件
         <span>{{ fileCount }}</span>
       </button>
-      <button type="button" @click="emit('open-knowledge')">
+      <button type="button" :class="{ active: activeView === 'knowledge' }" @click="emit('open-knowledge')">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h12a2 2 0 0 1 2 2v14H7a2 2 0 0 1-2-2V4Zm2 0v16M10 8h6M10 12h6" /></svg>
         知识库
-      </button>
-      <button type="button" @click="emit('open-images')">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4V5Zm3 11 3-3 2 2 2.5-3 2.5 4M9 9h.01" /></svg>
-        图库
       </button>
     </nav>
 
@@ -62,7 +58,7 @@ const emit = defineEmits<{
           v-for="conversation in conversations"
           :key="conversation.id"
           class="conversation-item"
-          :class="{ active: conversation.id === threadId }"
+          :class="{ active: activeView === 'chat' && conversation.id === threadId }"
         >
           <button
             class="conversation-select"

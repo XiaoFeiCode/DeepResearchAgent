@@ -21,7 +21,6 @@ from api.routers import (
     auth_router,
     conversations_router,
     files_router,
-    image_knowledge_router,
     ragflow_router,
     task_router,
     websocket_router,
@@ -30,7 +29,6 @@ from api.services import (
     AuthService,
     ConversationService,
     FileService,
-    ImageKnowledgeService,
     RagflowService,
     TaskService,
 )
@@ -50,7 +48,6 @@ async def lifespan(app: FastAPI):
     app.state.conversation_service = conversation_service
     app.state.task_service = TaskService(conversation_service=conversation_service)
     app.state.file_service = FileService(project_root)
-    app.state.image_knowledge_service = ImageKnowledgeService()
     app.state.ragflow_service = RagflowService()
 
     try:
@@ -76,7 +73,6 @@ def create_app() -> FastAPI:
     app.include_router(task_router)
     app.include_router(conversations_router)
     app.include_router(files_router)
-    app.include_router(image_knowledge_router)
     app.include_router(ragflow_router)
     app.include_router(websocket_router)
     return app

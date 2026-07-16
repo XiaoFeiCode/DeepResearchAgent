@@ -1995,3 +1995,106 @@ button:disabled {
     padding-right: 12px;
   }
 }
+
+.knowledge-page {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  overflow: auto;
+  padding: 36px clamp(24px, 5vw, 72px) 48px;
+  background: var(--canvas, #f8f7f4);
+}
+
+.knowledge-page-header,
+.dataset-create-form {
+  width: min(1120px, 100%);
+  margin: 0 auto;
+}
+
+.knowledge-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding-bottom: 26px;
+  border-bottom: 1px solid var(--line, #e5e2dc);
+}
+
+.knowledge-page-header h1 {
+  margin: 4px 0 8px;
+  font-size: 28px;
+}
+
+.knowledge-page-header p,
+.dataset-create-copy span {
+  margin: 0;
+  color: var(--muted, #6b7280);
+}
+
+.knowledge-page-actions {
+  display: flex;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.primary-button,
+.secondary-button {
+  min-height: 38px;
+  padding: 0 14px;
+  border-radius: 7px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.primary-button {
+  border: 1px solid #161616;
+  background: #161616;
+  color: #fff;
+}
+
+.secondary-button {
+  border: 1px solid var(--line, #d9d5cd);
+  background: #fff;
+  color: inherit;
+}
+
+.dataset-create-form {
+  display: grid;
+  grid-template-columns: minmax(170px, 1fr) minmax(170px, 1.2fr) minmax(180px, 1.5fr) auto;
+  align-items: end;
+  gap: 12px;
+  margin-top: 24px;
+  padding: 18px;
+  border: 1px solid var(--line, #e5e2dc);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.dataset-create-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.dataset-create-form input {
+  min-width: 0;
+  height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--line, #d9d5cd);
+  border-radius: 6px;
+  font: inherit;
+}
+
+.knowledge-page-content {
+  width: min(1120px, 100%);
+  margin: 20px auto 0;
+}
+
+.knowledge-page-content .knowledge-manager {
+  max-width: none;
+}
+
+.rail-nav button.active {
+  color: var(--ink, #161616);
+  background: var(--surface-muted, #efeeea);
+}

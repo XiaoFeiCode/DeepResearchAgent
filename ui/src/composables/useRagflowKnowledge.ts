@@ -10,6 +10,9 @@ export const useRagflowKnowledge = () => {
   const selectedFiles = ref<File[]>([])
   const loading = ref(false)
   const uploading = ref(false)
+  const creating = ref(false)
+  const newDatasetName = ref('')
+  const newDatasetDescription = ref('')
   const message = ref('')
   const error = ref('')
   const selectedDataset = computed(() => (
@@ -67,6 +70,31 @@ export const useRagflowKnowledge = () => {
     }
   }
 
+  const createDataset = async () => {
+    const name = newDatasetName.value.trim()
+    if (!name) {
+      showMessage("请输入知识库名称", true)
+      return
+    }
+    try {
+      creating.value = true
+      showMessage("")
+      const data = await ragflowApi.createDataset(name, newDatasetDescription.value.trim())
+      if (data.error) {
+        showMessage(data.error, true)
+        return
+      }
+      newDatasetName.value = ""
+      newDatasetDescription.value = ""
+      showMessage(`已创建知识库：${data.dataset?.name || name}`)
+      await fetchDatasets()
+      if (data.dataset?.id) selectedDatasetId.value = data.dataset.id
+    } catch (requestError) {
+      showMessage(`创建知识库失败：${getErrorMessage(requestError)}`, true)
+    } finally {
+      creating.value = false
+    }
+  }
   const selectDataset = async (dataset: RagflowDataset) => {
     selectedDatasetId.value = dataset.id
     await fetchDocuments(dataset.id)
@@ -133,6 +161,8 @@ export const useRagflowKnowledge = () => {
   }
 
   return {
+    createDataset,
+    creating,
     datasets,
     deleteDocument,
     documents,
@@ -142,6 +172,8 @@ export const useRagflowKnowledge = () => {
     handleFileChange,
     loading,
     message,
+    newDatasetDescription,
+    newDatasetName,
     parseDocument,
     selectedDataset,
     selectedDatasetId,

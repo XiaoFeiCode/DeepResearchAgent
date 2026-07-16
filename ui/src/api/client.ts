@@ -105,6 +105,10 @@ export const taskApi = {
 }
 
 export const ragflowApi = {
+  async createDataset(name: string, description: string) {
+    const response = await apiClient.post('/api/ragflow/datasets', { name, description })
+    return response.data
+  },
   async datasets() {
     const response = await apiClient.get('/api/ragflow/datasets')
     return response.data
@@ -136,28 +140,5 @@ export const ragflowApi = {
       document_names_or_ids: documentId,
     })
     return response.data
-  },
-}
-
-export const imageKnowledgeApi = {
-  async list(limit?: number) {
-    const response = await apiClient.get('/api/image-knowledge/images', {
-      params: limit ? { limit } : undefined,
-    })
-    return response.data
-  },
-  async upload(files: File[], description: string) {
-    const formData = new FormData()
-    formData.append('description', description)
-    files.forEach((file) => formData.append('files', file))
-    const response = await apiClient.post('/api/image-knowledge/images/upload', formData)
-    return response.data
-  },
-  async remove(imageId: string) {
-    await apiClient.delete(`/api/image-knowledge/images/${encodeURIComponent(imageId)}`)
-  },
-  async content(contentUrl: string) {
-    const response = await apiClient.get(contentUrl, { responseType: 'blob' })
-    return response.data as Blob
   },
 }

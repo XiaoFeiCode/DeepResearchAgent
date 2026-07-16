@@ -14,7 +14,6 @@ from core.settings import get_settings
 SCOPE_DESCRIPTIONS = {
     "task": "运行智能体任务",
     "files": "上传、下载和查看会话文件",
-    "image_knowledge": "管理和检索多模态图片知识库",
     "ragflow": "管理 RAGFlow 知识库和文档",
     "conversations": "查看和创建会话记录",
 }

@@ -2,6 +2,8 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+import requests
+
 from langchain_core.tools import tool
 from ragflow_sdk import RAGFlow
 
@@ -89,6 +91,83 @@ def get_ragflow_client() -> RAGFlow:
     return RAGFlow(api_key=api_key, base_url=base_url)
 
 
+def _chat_api_data(response: requests.Response, action: str) -> Any:
+    """兼容新版 RAGFlow 聊天接口的响应结构。"""
+    try:
+        payload = response.json()
+    except ValueError as error:
+        raise RuntimeError(f"{action}返回非 JSON 响应（HTTP {response.status_code}）") from error
+    if response.status_code >= 400 or payload.get("code", 0) != 0:
+        raise RuntimeError(f"{action}失败: {payload.get('message') or payload}")
+    return payload.get("data")
+
+
+def _list_chat_payloads(client: RAGFlow, name: str = "") -> list[dict[str, Any]]:
+    """读取 RAGFlow 助手列表，兼容 data 为列表或 data.chats 的版本差异。"""
+    response = requests.get(
+        f"{client.api_url}/chats",
+        headers=client.authorization_header,
+        params={"page": 1, "page_size": 100, "name": name or None},
+        timeout=30,
+    )
+    data = _chat_api_data(response, "获取 RAGFlow 助手列表")
+    chats = data.get("chats", []) if isinstance(data, dict) else data
+    if not isinstance(chats, list):
+        raise RuntimeError("RAGFlow 助手列表返回格式异常")
+    return [chat for chat in chats if isinstance(chat, dict)]
+
+
+def _ask_chat(client: RAGFlow, chat: dict[str, Any], question: str) -> str:
+    """创建临时会话提问，并在结束后清理会话。"""
+    chat_id = str(chat.get("id") or "")
+    if not chat_id:
+        raise RuntimeError("RAGFlow 助手缺少 ID")
+    session_id = ""
+    try:
+        created = requests.post(
+            f"{client.api_url}/chats/{chat_id}/sessions",
+            headers=client.authorization_header,
+            json={"name": "omniresearch-temp"},
+            timeout=30,
+        )
+        session = _chat_api_data(created, "创建 RAGFlow 临时会话")
+        if not isinstance(session, dict):
+            raise RuntimeError("RAGFlow 临时会话返回格式异常")
+        session_id = str(session.get("id") or "")
+        if not session_id:
+            raise RuntimeError("RAGFlow 临时会话缺少 ID")
+        completed = requests.post(
+            f"{client.api_url}/chats/{chat_id}/completions",
+            headers=client.authorization_header,
+            json={"question": question, "stream": False, "session_id": session_id},
+            timeout=180,
+        )
+        data = _chat_api_data(completed, "向 RAGFlow 助手提问")
+        answer = (data.get("answer") or data.get("content")) if isinstance(data, dict) else data
+        if not isinstance(answer, str) or not answer.strip():
+            raise RuntimeError("RAGFlow 助手没有返回可用答案")
+        return answer.strip()
+    finally:
+        if session_id:
+            requests.delete(
+                f"{client.api_url}/chats/{chat_id}/sessions",
+                headers=client.authorization_header,
+                json={"ids": [session_id]},
+                timeout=30,
+            )
+
+def _list_all_documents(dataset: Any) -> list[Any]:
+    """按新版 RAGFlow SDK 的单页上限分页获取知识库全部文档。"""
+    page = 1
+    page_size = 100
+    documents: list[Any] = []
+    while True:
+        batch = dataset.list_documents(page=page, page_size=page_size)
+        documents.extend(batch)
+        if len(batch) < page_size:
+            return documents
+        page += 1
+
 def _find_dataset(client: RAGFlow, dataset_name_or_id: str):
     """按知识库 ID 或名称查找 DataSet。"""
     target = dataset_name_or_id.strip()
@@ -162,7 +241,7 @@ def _find_documents(dataset: Any, names_or_ids: str) -> tuple[list[Any], list[st
     if not targets:
         raise ValueError("请提供文档名称或 ID。")
 
-    all_docs = dataset.list_documents(page=1, page_size=1000)
+    all_docs = _list_all_documents(dataset)
     matched = []
     missing = []
 
@@ -237,7 +316,7 @@ def list_ragflow_documents(dataset_name_or_id: str) -> str:
         if dataset is None:
             return f"未找到知识库: {dataset_name_or_id}"
 
-        documents = dataset.list_documents(page=1, page_size=1000)
+        documents = _list_all_documents(dataset)
         if not documents:
             return f"知识库“{_get_name(dataset)}”中没有文档。"
 
@@ -366,39 +445,24 @@ def delete_ragflow_documents(dataset_name_or_id: str, document_names_or_ids: str
 
 @tool
 def get_assistant_list() -> str:
-    """获取 RAGFlow 中的所有聊天助手信息。"""
+    """列出当前 API Key 可访问的 RAGFlow 助手及其关联知识库。"""
     monitor.report_tool(tool_name="获取 RAGFlow 助手列表工具")
-
     try:
-        client = get_ragflow_client()
-        assistants = client.list_chats()
+        assistants = _list_chat_payloads(get_ragflow_client())
         if not assistants:
             return "当前没有可用的 RAGFlow 助手。"
-
         result_lines = []
         for assistant in assistants:
-            name = _get_name(assistant, "未知助手")
-            description = _get_value(assistant, "description", "") or "无描述"
-            datasets = _get_value(assistant, "datasets", None)
-            dataset_ids = _get_value(assistant, "dataset_ids", None)
-
-            if datasets:
-                dataset_text = ", ".join(_get_name(dataset, "未知知识库") for dataset in datasets)
-            elif dataset_ids:
-                dataset_text = ", ".join(dataset_ids)
-            else:
-                dataset_text = "无关联知识库"
-
+            name = str(assistant.get("name") or "未知助手")
+            description = str(assistant.get("description") or "无描述")
+            datasets = assistant.get("kb_names") or assistant.get("dataset_ids") or []
+            dataset_text = ", ".join(str(item) for item in datasets) or "无关联知识库"
             result_lines.append(
-                f"助手名称: {name}\n"
-                f"助手描述: {description}\n"
-                f"关联知识库: {dataset_text}"
+                f"助手名称: {name}\n助手描述: {description}\n关联知识库: {dataset_text}"
             )
-
         return "\n\n".join(result_lines)
-    except Exception as e:
-        return f"获取助手列表失败: {e}"
-
+    except Exception as error:
+        return f"获取助手列表失败: {error}"
 
 @tool
 def create_ask_delete(assistant_name: str, question: str) -> str:
@@ -407,23 +471,11 @@ def create_ask_delete(assistant_name: str, question: str) -> str:
         tool_name="向 RAGFlow 助手提问工具",
         args={"assistant_name": assistant_name, "question": question},
     )
-
     try:
-        client = get_ragflow_client()
-        chats = client.list_chats(name=assistant_name)
-        if not chats:
+        assistants = _list_chat_payloads(get_ragflow_client())
+        chat = next((item for item in assistants if item.get("name") == assistant_name), None)
+        if chat is None:
             return f"未找到助手: {assistant_name}"
-
-        chat = chats[0]
-        session = chat.create_session(name="temp_session")
-        try:
-            stream = session.ask(question=question, stream=True)
-            answer = ""
-            for response in stream:
-                answer = _get_value(response, "content", str(response))
-        finally:
-            chat.delete_sessions(ids=[session.id])
-
-        return answer
-    except Exception as e:
-        return f"提问助手失败: {e}"
+        return _ask_chat(get_ragflow_client(), chat, question)
+    except Exception as error:
+        return f"提问助手失败: {error}"

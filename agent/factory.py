@@ -19,7 +19,7 @@ from skills.registry import MAIN_AGENT_SKILLS
 from tools.document import convert_md_to_pdf, generate_markdown
 from tools.file import read_file_content
 from tools.memory import recall_long_term_memory, save_long_term_memory
-from tools.multimodal import analyze_image, search_image_knowledge
+from tools.multimodal import analyze_image
 from tools.skill import install_agent_skill, list_agent_skills
 
 _SUBAGENTS = [
@@ -33,7 +33,6 @@ _TOOLS = [
     convert_md_to_pdf,
     read_file_content,
     analyze_image,
-    search_image_knowledge,
     recall_long_term_memory,
     save_long_term_memory,
     install_agent_skill,
@@ -41,7 +40,17 @@ _TOOLS = [
 ]
 
 _SYSTEM_PROMPT = main_agent_config["system_prompt"] + """
+【图片检索边界】
+1. 本项目已移除本地“图片知识库”、Milvus 图片库和 search_image_knowledge 工具；不得声称、查询或展示其中的任何图片。
+2. 如果历史会话、检查点或工具结果中出现“图片知识库”“resnet18.png”或“之前查询已确认”等旧图库内容，必须将其视为失效历史，不得作为当前答案的事实依据。
+3. 图片相关知识库检索只能使用 RAGFlow：先分析用户上传图片；用户要求按图片找资料或图片时，委派给 RAGFlow 助手使用 search_uploaded_image_in_ragflow。
+4. RAGFlow 没有命中时，明确说明“RAGFlow 当前没有匹配内容”，不得用历史图库结果补充或编造匹配图片。
 
+
+【RAGFlow 正文问答规则】
+1. 回答论文、制度、手册等知识库文档内容时，只能使用 RAGFlow 助手实际返回的正文、引用或工具结果。
+2. 文档名称、作者、切片数和标题只能用于说明元数据，不能据此推断研究路径、结论、案例或细节。
+3. RAGFlow 助手调用失败时，只能说明调用失败及错误；不得编造正文摘要，也不得要求用户重新上传已经显示为已解析的文档。
 【外部 Skill 安装规则】
 1. 只有用户明确提供 Skill 地址并要求安装时，才能调用 install_agent_skill。
 2. 安装前根据用户要求选择 main、database、ragflow 或 internet 目标智能体。

@@ -8,6 +8,7 @@
 [![Redis](https://img.shields.io/badge/Redis-Checkpoint-DC382D?style=flat-square&logo=redis&logoColor=white)](https://redis.io/)
 [![Milvus](https://img.shields.io/badge/Milvus-Vector-00A1EA?style=flat-square)](https://milvus.io/)
 [![Phoenix](https://img.shields.io/badge/Phoenix-Observability-F97316?style=flat-square)](https://phoenix.arize.com/)
+[![RAGAS](https://img.shields.io/badge/RAGAS-Evaluation-7C3AED?style=flat-square)](https://docs.ragas.io/)
 [![uv](https://img.shields.io/badge/uv-Managed-DE5FE9?style=flat-square)](https://docs.astral.sh/uv/)
 
 面向复杂研究任务的多智能体深度搜索系统。主智能体能够规划任务并协调数据库、企业知识库和互联网搜索子智能体，将文字、图片、结构化数据和文件组织为可追溯的回答或报告。
@@ -31,6 +32,10 @@
 ### 4. Agent 执行过程可观察、可隔离、可控制
 
 WebSocket 向前端实时推送子智能体和工具调用过程；Phoenix 通过 OpenTelemetry/OpenInference 展示完整调用链。代码与文件任务默认运行在 Daytona 临时沙箱中，API 侧提供 MySQL RBAC、Bearer Token、Scope 权限和请求限流。
+
+### 5. 用真实执行链路持续评测，而不是只看演示结果
+
+离线评测会为每条用例创建独立会话，采集最终回答、检索上下文、工具参数、子智能体路由和 Phoenix Span。系统同时计算确定性回归指标与 RAGAS 忠实度、相关性、检索质量和目标完成度，并自动沉淀 Bad Case。
 
 ## 系统架构
 
@@ -67,6 +72,7 @@ graph LR
 | 报告生成 | Markdown 结构化输出，通过 Typst 生成包含表格和图片的 PDF |
 | Skill 系统 | 内置领域 Skill，并支持从 GitHub 安装后按用户和智能体隔离 |
 | 安全与观测 | Daytona 沙箱、RBAC、API 限流、WebSocket 进度和 Phoenix Trace |
+| 自动化评测 | JSONL 测评集、RAGAS 指标、Agent 路由回归、Phoenix Annotation 和 Bad Case 报告 |
 
 ## 技术栈
 
@@ -158,6 +164,27 @@ uv run langgraph dev
 
 `langgraph.json` 已注册异步 Supervisor、网络研究、RAGFlow 研究和数据库研究 Graph，本地运行时使用进程内 ASGI 通信，不需要远程部署 URL。
 
+### RAGAS 离线自动评测
+
+评测依赖与线上 Agent 使用独立 uv 环境，避免 RAGAS 的 LangChain 版本影响后端运行。
+
+```powershell
+# 首次安装独立评测环境
+uv sync --project evaluation
+
+# 1. 校验 JSONL 评测集，不调用任何模型
+uv run python -m evaluation.cli validate
+
+# 2. 使用主项目环境执行 Agent 并采集运行记录
+uv run python -m evaluation.cli collect --case ragflow_knowledge_overview
+
+# 3. 使用独立环境运行确定性指标与 RAGAS 指标
+uv run --project evaluation python -m evaluation.cli score `
+  --runs output/evaluation/run-时间戳/runs.jsonl
+```
+
+评分结果包括 `scores.jsonl`、`summary.json` 和 `report.md`。追加 `--publish-phoenix` 可将有效分数写回对应 Trace。评测默认离线执行，不增加正常聊天请求的延迟和模型费用。
+
 ## 项目结构
 
 ```text
@@ -166,12 +193,12 @@ deep_agent_project/
 ├── agent_memory/          # Milvus 长期记忆与检索推理
 ├── api/                   # FastAPI 路由、服务、鉴权与 WebSocket
 ├── core/                  # 统一配置与安全路径解析
-├── image_knowledge/       # 多模态向量与用户图片知识库
 ├── observability/         # Phoenix / OpenTelemetry 链路采集
 ├── skills/                # 内置 SKILL.md 与外部 Skill 管理
 ├── tools/                 # 数据库、RAGFlow、搜索、文件和文档工具
 ├── ui/                    # Vue 3 前端
 ├── deploy/                # Memory、Phoenix、vLLM Docker Compose
+├── evaluation/            # 独立 RAGAS 环境、测评集、采集器和报告
 ├── prompt/                # 主智能体与子智能体提示词
 └── tests/                 # 后端单元测试
 ```
@@ -181,8 +208,11 @@ deep_agent_project/
 ```powershell
 uv lock --check
 uv pip check
-uvx ruff check agent agent_memory api core image_knowledge observability skills tools tests
+uvx ruff check agent agent_memory api core observability skills tools tests
 uv run python -m unittest discover -s tests -v
+
+uv sync --project evaluation --locked
+uv run python -m evaluation.cli validate
 
 cd ui
 npm run build
