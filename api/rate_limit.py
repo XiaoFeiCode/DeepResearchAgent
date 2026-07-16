@@ -1,4 +1,3 @@
-import os
 import time
 from collections import deque
 from threading import Lock
@@ -7,10 +6,11 @@ from fastapi import Request
 from fastapi.responses import JSONResponse, Response
 
 from api.security import decode_access_token
+from core.settings import get_settings
 
 
 class InMemoryRateLimiter:
-    """单进程内存限流器，适合本地 demo；多实例部署时应替换为 Redis。"""
+    """单进程内存限流器；多实例部署时应替换为 Redis。"""
 
     def __init__(self, max_requests: int, window_seconds: int):
         self.max_requests = max(max_requests, 1)
@@ -33,9 +33,10 @@ class InMemoryRateLimiter:
             return True, remaining - 1, 0
 
 
+_settings = get_settings()
 rate_limiter = InMemoryRateLimiter(
-    max_requests=int(os.getenv("API_RATE_LIMIT_REQUESTS", "120")),
-    window_seconds=int(os.getenv("API_RATE_LIMIT_WINDOW_SECONDS", "60")),
+    max_requests=_settings.api_rate_limit_requests,
+    window_seconds=_settings.api_rate_limit_window_seconds,
 )
 
 
@@ -63,7 +64,7 @@ async def rate_limit_middleware(request: Request, call_next) -> Response:
     if not allowed:
         return JSONResponse(
             status_code=429,
-            content={"detail": "Too many requests"},
+            content={"detail": "请求过于频繁，请稍后重试"},
             headers={
                 "Retry-After": str(retry_after),
                 "X-RateLimit-Limit": str(rate_limiter.max_requests),

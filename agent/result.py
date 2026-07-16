@@ -4,7 +4,7 @@ from typing import Any
 
 @dataclass
 class AgentRunResult:
-    """Final Agent text plus structured artifacts that must survive refresh."""
+    """Agent 最终文本和需要跨页面刷新保留的结构化元数据。"""
 
     content: str
     metadata: dict[str, Any] = field(default_factory=dict)

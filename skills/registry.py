@@ -1,4 +1,4 @@
-"""Native DeepAgents skill source registry."""
+"""DeepAgents 原生 Skill 来源注册表。"""
 
 import hashlib
 from pathlib import Path
@@ -16,12 +16,12 @@ SKILL_TARGETS = {
 
 
 def user_skill_storage_key(user_id: str) -> str:
-    """Map a user identity to a filesystem-safe, non-identifying directory key."""
+    """把用户标识映射为文件系统安全且不可直接识别身份的目录键。"""
     return hashlib.sha256(user_id.encode("utf-8")).hexdigest()[:24]
 
 
 def skill_source(group: str) -> str:
-    """Return a Daytona-backed source containing skill subdirectories."""
+    """返回包含 Skill 子目录、由 Daytona 承载的来源。"""
     return f"{REMOTE_SKILLS_ROOT}/{group}/"
 
 

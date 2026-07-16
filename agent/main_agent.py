@@ -1,353 +1,152 @@
-from agent.subagents.rag_sub_agent import rag_sub_agent
-from agent.subagents.database_query_agent import database_query_agent
-from agent.subagents.internet_sub_agent import internet_sub_agent
+"""主智能体任务编排入口。"""
 
-# main_agent tool导入
-from tools.document import convert_md_to_pdf, generate_markdown
-from tools.file import read_file_content
-from tools.memory import recall_long_term_memory, save_long_term_memory
-from tools.multimodal import analyze_image, search_image_knowledge
-from tools.skill import install_agent_skill, list_agent_skills
+from __future__ import annotations
 
-from deepagents import create_deep_agent
-
-from agent.llm import model
-from agent.result import AgentRunResult
-from agent.load_prompt import main_agent_config
-from agent.sandbox import REMOTE_WORKSPACE, daytona_sandbox_manager
-from skills.registry import MAIN_AGENT_SKILLS
-from langgraph.checkpoint.redis.aio import AsyncRedisSaver
-
-from api.monitor import monitor
-from agent_memory import long_term_memory
 import asyncio
-import os
+import logging
 import uuid
-import shutil
-from pathlib import Path
 
+from agent.factory import get_main_agent
+from agent.result import AgentRunResult
+from agent.runtime import (
+    build_workspace_instruction,
+    prepare_session_environment,
+    process_stream_chunk,
+)
+from agent.sandbox import REMOTE_WORKSPACE, daytona_sandbox_manager
+from agent_memory import long_term_memory
 from api.context import (
-    reset_session_context,
     get_result_metadata,
+    reset_request_context,
     set_result_metadata_context,
     set_session_context,
     set_thread_context,
     set_user_context,
 )
+from api.monitor import monitor
+from observability import agent_trace, record_agent_result
 
-from langchain_core.messages import AIMessage
-
-
-# 1. 搭建多智能体结构
-subagents_list = [
-    rag_sub_agent,
-    database_query_agent,
-    internet_sub_agent
-]
-
-main_system_prompt = main_agent_config["system_prompt"] + """
-
-【外部 Skill 安装规则】
-1. 只有用户明确提供 Skill 地址并要求安装时，才能调用 install_agent_skill。
-2. 安装前根据用户要求选择 main、database、ragflow 或 internet 目标智能体。
-3. 不得擅自启用外部 Skill 中的可执行脚本，也不得绕过下载与安全校验。
-4. 安装成功后再委派给对应子智能体；需要确认现有分配时调用 list_agent_skills。
-"""
-
-# Redis checkpointer 会把同一个 thread_id 下的 Agent 状态保存下来。
-# 用户连续追问时沿用同一个 thread_id；点击“新会话”时前端会生成新的 thread_id。
-project_root = Path(__file__).resolve().parent.parent
-runtime_dir = project_root / "runtime"
-runtime_dir.mkdir(exist_ok=True)
-main_agent = None
-checkpoint_context = None
-checkpoint_saver = None
-main_agent_lock = asyncio.Lock()
+logger = logging.getLogger(__name__)
 
 
-async def get_main_agent():
-    """异步初始化主智能体，确保 astream 使用异步版 Redis checkpointer。"""
-    global main_agent, checkpoint_context, checkpoint_saver
-
-    if main_agent is not None:
-        return main_agent
-
-    async with main_agent_lock:
-        if main_agent is not None:
-            return main_agent
-
-        redis_url = os.getenv("REDIS_CHECKPOINT_URL", "redis://127.0.0.1:6380")
-        ttl_minutes = int(os.getenv("REDIS_CHECKPOINT_TTL_MINUTES", "10080"))
-        checkpoint_context = AsyncRedisSaver.from_conn_string(
-            redis_url,
-            ttl={"default_ttl": ttl_minutes, "refresh_on_read": True},
-        )
-        checkpoint_saver = await checkpoint_context.__aenter__()
-        await checkpoint_saver.setup()
-        main_agent = create_deep_agent(
-            model=model,
-            subagents=subagents_list,
-            tools=[
-                generate_markdown,
-                convert_md_to_pdf,
-                read_file_content,
-                analyze_image,
-                search_image_knowledge,
-                recall_long_term_memory,
-                save_long_term_memory,
-                install_agent_skill,
-                list_agent_skills,
-            ],
-            system_prompt=main_system_prompt,
-            checkpointer=checkpoint_saver,
-            backend=daytona_sandbox_manager.backend_for_runtime,
-            skills=MAIN_AGENT_SKILLS,
-        )
-        return main_agent
-
-
-async def close_main_agent_resources():
-    """服务关闭时释放异步 Redis checkpointer 和 Daytona 沙箱资源。"""
-    global main_agent, checkpoint_context, checkpoint_saver
-    if checkpoint_context is not None:
-        await checkpoint_context.__aexit__(None, None, None)
-        checkpoint_context = None
-        checkpoint_saver = None
-        main_agent = None
-    await asyncio.to_thread(daytona_sandbox_manager.close)
-
-
-# 异步执行主智能体的函数，供API调用
-def _prepare_session_environment(thread_id: str):
-    """
-    初始化会话运行环境（会话文件夹,以及相对路径，上传文件的信息！）。
-    目标：
-    1. 创建独立的物理工作空间。
-    2. 处理用户上传的文件。
-    3. 生成供 Agent 和前端使用的路径上下文（提示词）。
-
-    执行步骤：
-    1. 创建绝对路径：`project_root/output/session_{uuid}`。
-    2. 标准化路径：转换为 POSIX 风格 (`/`) 以兼容 LLM 和跨平台。
-    3. 文件迁移：将 `updated/session_{uuid}` 中的文件复制到工作目录。
-    4. 构造提示词：生成包含已上传文件列表的 Context 文本。
-
-    Returns:
-        tuple: (
-            session_dir_str (str): 物理工作目录的绝对路径 (当前会话对应文件存储位置)。
-            relative_session_dir (str): 相对于项目根目录的路径 (用于提示词)。
-            uploaded_info (str): 注入到 Prompt 中的文件列表描述。
-        )
-    """
-    # 1. [创建] 定义并创建会话的绝对输出路径
-    project_root = Path(__file__).resolve().parent.parent
-    session_dir = project_root / "output" / f"session_{thread_id}"
-    session_dir.mkdir(parents=True, exist_ok=True)
-
-    # 2. [标准化] 路径转为 POSIX 风格 (防止大模型因反斜杠产生幻觉)
-    session_dir_str = str(session_dir).replace("\\", "/")
-
-    # 3. [相对化] 获取相对路径 (用于提示词展示，如 "output/session_123")
-    relative_session_dir = str(session_dir.relative_to(project_root)).replace("\\", "/")
-
-    # 4. [迁移] 检查并处理上传文件
-    upload_dir = project_root / "updated" / f"session_{thread_id}"
-    uploaded_info = ""
-
-    if upload_dir.exists():
-        files = [f.name for f in upload_dir.iterdir() if f.is_file()]
-
-        if files:
-            for f in files:
-                # 核心动作：将文件从临时上传区复制到正式工作区
-                shutil.copy2(upload_dir / f, session_dir / f)
-
-            # 5. [构造] 生成文件列表提示词
-            uploaded_info = (f"\n    [已上传文件] 已加载到工作目录:\n" +
-                             "\n".join([f"    - {f}" for f in files]) +
-                             "\n    请优先使用工具读取并参考这些文件。")
-
-    return session_dir_str, relative_session_dir, uploaded_info
-
-def _process_stream_chunk(chunk):
-    """
-    处理 LangGraph 流式输出的增量状态 (Stream Processing)。
-    目标：
-    1. 解析 Agent 的每一步思考和行动。
-    2. 识别关键事件（工具调用、子 Agent 委派、最终回复）。
-    3. 通过 Monitor 实时上报状态给前端。
-    核心逻辑：
-    - 监听 `tool_calls` -> 记录日志，若是 'task' 则上报子 Agent 状态。
-    - 监听 `content` -> 若无工具调用，则视为 Agent 的最终回复。
-    Args:
-        chunk (dict): 增量状态字典，如 {"node_name": {"messages": [AIMessage(...)]}}
-    """
-    final_result = None
-    # 1. [记录] 记录原始数据便于回溯
-    # logger.log_main_chunk(chunk)
-
-    # 2. [遍历] 解析每个节点的输出 (通常是 'agent' 或 'tools' 节点)
-    for node_name, state in chunk.items():
-        if not state or "messages" not in state: continue
-        # 3. [提取] 获取最新一条消息 (Latest Message)
-        messages = state["messages"]
-        if isinstance(messages, list) and messages:
-            last_msg = messages[-1]
-            # 4. [分支] 处理 AI 消息 (AIMessage)
-            if isinstance(last_msg, AIMessage):
-                # Case 1: Agent 决定调用工具 (Tool Call)
-                if last_msg.tool_calls:
-                    for tool in last_msg.tool_calls:
-                        # 特殊处理：如果是 'task' 工具，说明正在委派给子 Agent
-                        if tool['name'] == 'task':
-                            monitor.report_assistant(
-                                tool['args'].get('subagent_type', 'Agent'),
-                                {"desc": tool['args'].get('description')}
-                            )
-                # Case 2: Agent 生成最终回复 (Final Answer)
-                elif last_msg.content:
-                    monitor.report_task_result(last_msg.content)
-                    final_result = last_msg.content
-
-    return final_result
-
-
-# ====================== 核心执行逻辑 ======================
 async def run_deep_agent(
     task_query: str,
     thread_id: str | None = None,
     user_id: str = "anonymous",
-):
-    """
-    DeepAgents 核心执行入口 (Agent Execution Runtime)。
+) -> AgentRunResult:
+    """在可观测根链路中执行一次主智能体任务。"""
+    actual_thread_id = thread_id or str(uuid.uuid4())
+    with agent_trace(
+        task_query=task_query,
+        thread_id=actual_thread_id,
+        user_id=user_id,
+    ) as span:
+        result = await _execute_deep_agent(task_query, actual_thread_id, user_id)
+        record_agent_result(span, result.content, result.metadata)
+        return result
 
-    目标：
-    1. 接收用户的自然语言任务。
-    2. 准备独立的运行环境 (Workspace)。
-    3. 启动 LangGraph 智能体，并通过流式 (Stream) 实时处理每一步。
-    4. 确保上下文隔离和异常安全。
 
-    执行步骤：
-    1. ID 初始化：确保每个任务有唯一的 `thread_id`。
-    2. 环境准备：创建目录、迁移文件、生成路径信息。
-    3. 上下文绑定：将 `thread_id` 和 `session_dir` 绑定到当前线程 (ContextVar)。
-    4. 提示词构建：将环境信息注入到 Prompt。
-    5. 流式执行：驱动 LangGraph 运行，并实时解析/上报每一个 Chunk。
-    6. 资源清理：任务结束后（无论成功失败）重置上下文。
-    """
-    # 1. [ID 初始化] 确保有唯一的会话 ID
-    if not thread_id: thread_id = str(uuid.uuid4())
-    print(f"--- Start Task: {task_query} (Thread: {thread_id}) ---")
+async def _recall_memory(task_query: str, user_id: str) -> str:
+    """召回与当前问题相关的长期记忆，并转换为提示词片段。"""
+    try:
+        memories = await asyncio.to_thread(
+            long_term_memory.search,
+            user_id=user_id,
+            query=task_query,
+            limit=5,
+        )
+    except Exception as error:
+        logger.warning("长期记忆召回不可用：%s", error)
+        return ""
 
-    # 2. [环境准备] 创建目录、处理上传文件
-    session_dir_str, relative_session_dir, uploaded_info = _prepare_session_environment(thread_id)
+    if not memories:
+        return ""
 
-    # 3. [上下文绑定] 初始化 ContextVars (关键：隔离并发请求)
+    memory_lines = [
+        f"- [{item['memory_type']}] {item['content']}"
+        for item in memories
+    ]
+    return (
+        "\n\n【相关长期记忆】\n"
+        + "\n".join(memory_lines)
+        + "\n这些记忆仅作为历史上下文；若与当前要求冲突，以当前要求为准。"
+    )
+
+async def _execute_deep_agent(
+    task_query: str,
+    thread_id: str,
+    user_id: str,
+) -> AgentRunResult:
+    """绑定会话上下文、沙箱和记忆，驱动 LangGraph 流式执行。"""
+    logger.info("开始执行任务：thread_id=%s user_id=%s", thread_id, user_id)
+    environment = prepare_session_environment(thread_id)
+
     thread_token = set_thread_context(thread_id)
-    session_token = set_session_context(session_dir_str)
+    session_token = set_session_context(environment.directory_text)
     user_token = set_user_context(user_id)
     result_metadata_token = set_result_metadata_context()
-    # 给前端推送文件夹，方便后续查询当前会话对应文件夹下的所有文件
-    monitor.report_session_dir(session_dir_str)
+    monitor.report_session_dir(environment.directory_text)
 
-    # 4. [运行时配置] LangChain Config (注入记忆 key)
-    config = {
-        "configurable": {"thread_id": thread_id},  # 用于 MemorySaver 记忆上下文
-    }
-    # 5. [提示词构建] 动态注入环境约束
-    memory_instruction = ""
-    path_instruction = f"""
-    【工作环境指令】
-    工作目录: {relative_session_dir}
-    {uploaded_info}
+    config = {"configurable": {"thread_id": thread_id}}
+    workspace_instruction = build_workspace_instruction(environment)
 
-    规则：
-    1. 新生成文件必须保存到工作目录：'{relative_session_dir}/filename'
-    2. 使用相对路径，禁止使用绝对路径
-    3. 若存在上传文件，请先分析内容
-    """
-
-    # 6. [流式执行] 启动 Agent 循环
     try:
-        try:
-            memories = await asyncio.to_thread(
-                long_term_memory.search,
-                user_id=user_id,
-                query=task_query,
-                limit=5,
-            )
-            if memories:
-                memory_lines = [
-                    f"- [{item['memory_type']}] {item['content']}"
-                    for item in memories
-                ]
-                memory_instruction = (
-                    "\n\n【相关长期记忆】\n"
-                    + "\n".join(memory_lines)
-                    + "\n这些记忆仅作为历史上下文；若与当前要求冲突，以当前要求为准。"
-                )
-        except Exception as memory_error:
-            print(f"Long-term memory recall unavailable: {memory_error}")
-
+        memory_instruction = await _recall_memory(task_query, user_id)
         await asyncio.to_thread(
             daytona_sandbox_manager.upload_workspace,
             thread_id,
-            Path(session_dir_str),
+            environment.directory,
         )
         agent = await get_main_agent()
-        # astream: 异步生成器，像流水线一样逐个吐出 Agent 的思考片段
-        final_result = None
+        final_result: str | None = None
         async for chunk in agent.astream(
-                {
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": task_query
-                            + path_instruction
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": (
+                            task_query
+                            + workspace_instruction
                             + memory_instruction
                             + f"\nDaytona 沙箱工作目录是 {REMOTE_WORKSPACE}。"
                             + "代码、命令、上传文件和临时文件必须在该目录中处理；"
-                            + f"使用绝对路径，例如 {REMOTE_WORKSPACE}/report.md。",
-                        }
-                    ]
-                },
-                config=config
+                            + f"使用绝对路径，例如 {REMOTE_WORKSPACE}/report.md。"
+                        ),
+                    }
+                ]
+            },
+            config=config,
         ):
-            # 实时处理每一个片段 (上报前端)
-            chunk_result = _process_stream_chunk(chunk)
+            chunk_result = process_stream_chunk(chunk)
             if chunk_result:
                 final_result = chunk_result
+
         return AgentRunResult(
             content=final_result or "Done",
             metadata=get_result_metadata(),
         )
-    except Exception as e:
-        # 7. [异常处理] 兜底捕获
-        print(f"Error: {e}")
-        monitor._emit("error", f"Execution failed: {e}")
-        return AgentRunResult(content=f"Error: {e}")
+    except Exception as error:
+        logger.exception("主智能体任务执行失败")
+        monitor.report_error(f"Execution failed: {error}")
+        return AgentRunResult(content=f"Error: {error}")
     finally:
         try:
             await asyncio.to_thread(
                 daytona_sandbox_manager.download_workspace,
                 thread_id,
-                Path(session_dir_str),
+                environment.directory,
             )
-        except Exception as sync_error:
-            print(f"Failed to sync Daytona workspace: {sync_error}")
+        except Exception as error:
+            logger.warning("同步 Daytona 工作目录失败：%s", error)
         finally:
             try:
-                await asyncio.to_thread(
-                    daytona_sandbox_manager.release,
-                    thread_id,
-                )
-            except Exception as release_error:
-                print(f"Failed to release Daytona sandbox: {release_error}")
-        # 8. [资源清理] 必须重置 ContextVars，防止线程池复用导致的上下文污染
-        if 'session_token' in locals():
-            reset_session_context(
-                session_token,
-                thread_token,
-                user_token,
-                result_metadata_token,
-            )
+                await asyncio.to_thread(daytona_sandbox_manager.release, thread_id)
+            except Exception as error:
+                logger.warning("释放 Daytona 沙箱失败：%s", error)
+
+        reset_request_context(
+            session_token,
+            thread_token,
+            user_token,
+            result_metadata_token,
+        )

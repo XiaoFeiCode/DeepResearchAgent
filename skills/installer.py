@@ -1,8 +1,7 @@
-"""Download, validate, and persist user-provided DeepAgents skills."""
+"""下载、校验并持久化用户提供的 DeepAgents Skill。"""
 
 from __future__ import annotations
 
-import os
 import re
 import shutil
 import uuid
@@ -11,6 +10,8 @@ from typing import Any
 from urllib.parse import quote, urlparse
 
 import requests
+
+from core.settings import get_settings
 import yaml
 
 from skills.registry import (
@@ -38,7 +39,7 @@ BLOCKED_EXECUTABLE_SUFFIXES = {
 
 
 class SkillInstallError(ValueError):
-    """Raised when a remote skill fails validation or installation."""
+    """远程 Skill 校验或安装失败时抛出。"""
 
 
 def _request_headers() -> dict[str, str]:
@@ -46,7 +47,7 @@ def _request_headers() -> dict[str, str]:
         "Accept": "application/vnd.github+json",
         "User-Agent": "DeepAgent-Studio-Skill-Installer",
     }
-    if token := os.getenv("GITHUB_TOKEN"):
+    if token := get_settings().github_token:
         headers["Authorization"] = f"Bearer {token}"
     return headers
 
@@ -107,7 +108,7 @@ def _github_contents(owner: str, repo: str, ref: str, path: str) -> dict[PurePos
 
 
 def download_skill(skill_url: str) -> dict[PurePosixPath, bytes]:
-    """Download one skill directory from an approved GitHub URL."""
+    """从允许的 GitHub 地址下载一个 Skill 目录。"""
     parsed = urlparse(skill_url.strip())
     if parsed.scheme != "https":
         raise SkillInstallError("Skill 地址必须使用 HTTPS")
@@ -173,7 +174,7 @@ def _parse_metadata(files: dict[PurePosixPath, bytes]) -> dict[str, Any]:
 
 
 def _validate_files(files: dict[PurePosixPath, bytes]) -> None:
-    allow_executable = os.getenv("SKILL_ALLOW_EXECUTABLE_FILES", "false").lower() == "true"
+    allow_executable = get_settings().skill_allow_executable_files
     for relative_path in files:
         if relative_path.is_absolute() or ".." in relative_path.parts:
             raise SkillInstallError(f"Skill 包含不安全路径: {relative_path}")
@@ -197,7 +198,7 @@ def install_skill(
     user_id: str,
     replace: bool = False,
 ) -> dict[str, Any]:
-    """Install a validated skill into one user's target-agent namespace."""
+    """把已校验的 Skill 安装到指定用户和目标智能体的命名空间。"""
     if target_agent not in SKILL_TARGETS:
         allowed = ", ".join(SKILL_TARGETS)
         raise SkillInstallError(f"target_agent 必须是: {allowed}")
@@ -240,7 +241,7 @@ def install_skill(
 
 
 def list_installed_skills(user_id: str) -> list[dict[str, str]]:
-    """List skills assigned to this user, grouped by target agent."""
+    """按目标智能体分组列出分配给当前用户的 Skill。"""
     user_root = INSTALLED_SKILLS_ROOT / user_skill_storage_key(user_id)
     if not user_root.exists():
         return []

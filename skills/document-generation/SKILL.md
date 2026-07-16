@@ -16,6 +16,8 @@ Use this skill when the user explicitly asks for a generated file.
 2. Create Markdown first.
    - Use `generate_markdown` for Markdown output.
    - If the user asks for PDF, first generate Markdown, then call `convert_md_to_pdf`.
+   - The PDF tool uses the shared Typst report template; keep tables, images, links,
+     fenced code blocks, and heading levels valid in standard Markdown.
 
 3. Save only in the current session workspace.
    - Follow the runtime workspace instruction injected by the server.

@@ -1,17 +1,12 @@
-import os
 from typing import Any
-from urllib.parse import quote_plus
 
-from dotenv import find_dotenv, load_dotenv
 from langchain_core.tools import tool
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import Session, create_engine
 
 from api.monitor import monitor
-
-# 加载项目根目录或当前环境中的 .env 文件，读取 MYSQL_* 数据库配置。
-load_dotenv(find_dotenv())
+from core.settings import get_settings
 
 # SQLModel 底层仍然使用 SQLAlchemy Engine。这里先设为 None，
 # 等真正调用数据库工具时再初始化，避免导入模块阶段就强制连接/校验数据库配置。
@@ -19,21 +14,8 @@ _engine = None
 
 
 def get_database_url() -> str:
-    """从环境变量拼接 MySQL 连接 URL。"""
-    user = os.getenv("MYSQL_USER")
-    password = os.getenv("MYSQL_PASSWORD")
-    host = os.getenv("MYSQL_HOST", "localhost")
-    port = os.getenv("MYSQL_PORT", "3306")
-    database = os.getenv("MYSQL_DATABASE")
-
-    # user/password/database 是连接业务库的核心配置，缺少时直接给出明确错误。
-    if not all([user, password, database]):
-        raise ValueError("Missing MYSQL_USER, MYSQL_PASSWORD, or MYSQL_DATABASE in environment.")
-
-    # 用户名和密码可能包含 @、:、/ 等特殊字符，放进 URL 前需要转义。
-    safe_user = quote_plus(user)
-    safe_password = quote_plus(password)
-    return f"mysql+mysqlconnector://{safe_user}:{safe_password}@{host}:{port}/{database}?charset=utf8mb4"
+    """从统一配置生成 MySQL 连接 URL。"""
+    return get_settings().mysql_url()
 
 
 def get_engine():

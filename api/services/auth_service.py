@@ -1,7 +1,6 @@
 import hashlib
 import hmac
 import logging
-import os
 import secrets
 from datetime import datetime, timezone
 
@@ -9,6 +8,7 @@ from sqlalchemy import Column, String
 from sqlmodel import Field, Session, SQLModel, select
 
 from api.security import AuthenticatedUser, DEFAULT_SCOPES, SCOPE_DESCRIPTIONS
+from core.settings import get_settings
 from tools.database.mysql import get_engine
 
 logger = logging.getLogger(__name__)
@@ -225,10 +225,11 @@ class AuthService:
         return roles
 
     def _ensure_demo_users(self, session: Session, roles: dict[str, RBACRole]) -> None:
+        settings = get_settings()
         users = [
-            (os.getenv("API_ADMIN_USERNAME", "admin"), os.getenv("API_ADMIN_PASSWORD", "admin123456"), "admin"),
+            (settings.api_admin_username, settings.api_admin_password, "admin"),
         ]
-        if os.getenv("API_SEED_DEMO_USERS", "true").strip().lower() not in {"0", "false", "no", "off"}:
+        if settings.api_seed_demo_users:
             users.extend(
                 [
                     ("researcher", "researcher123456", "researcher"),

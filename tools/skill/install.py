@@ -1,4 +1,4 @@
-"""Agent tools for installing and listing user-scoped skills."""
+"""用于安装和列出用户级 Skill 的 Agent 工具。"""
 
 from typing import Any, Literal
 

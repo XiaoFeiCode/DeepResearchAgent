@@ -1,0 +1,26 @@
+services:
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    container_name: deep-agent-phoenix
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6006:6006"
+      - "127.0.0.1:4317:4317"
+    environment:
+      PHOENIX_WORKING_DIR: /mnt/data
+      PHOENIX_TELEMETRY_ENABLED: "false"
+    volumes:
+      - phoenix_data:/mnt/data
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:6006').read(1)"
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    mem_limit: 2g
+
+volumes:
+  phoenix_data:

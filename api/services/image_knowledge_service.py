@@ -4,7 +4,7 @@ from image_knowledge import ImageKnowledgeStore, image_knowledge_store
 
 
 class ImageKnowledgeService:
-    """Coordinate uploads and searches for the multimodal image knowledge base."""
+    """协调多模态图片知识库的上传与检索。"""
 
     def __init__(self, store: ImageKnowledgeStore = image_knowledge_store) -> None:
         self.store = store

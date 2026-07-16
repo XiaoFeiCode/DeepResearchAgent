@@ -1,21 +1,12 @@
 from pathlib import Path
-import sys
 from typing import Any
 from uuid import UUID
 
 from langchain_core.tools import tool
 from ragflow_sdk import RAGFlow
 
-# 兼容直接运行:
-#   uv run tools/ragflow/base.py
-# 这种方式执行时，Python 只会把 tools/ragflow/ 加进 sys.path，
-# 所以这里手动补项目根目录，保证能导入 ragflow.config 和 api.monitor。
-project_root = Path(__file__).resolve().parents[2]
-if str(project_root) not in sys.path:
-    sys.path.insert(0, str(project_root))
-
 from api.monitor import monitor
-from ragflow.config import _load_ragflow_env
+from tools.ragflow.config import PROJECT_ROOT, load_ragflow_env
 
 
 def _get_value(value: Any, key: str, default: Any = None) -> Any:
@@ -77,7 +68,7 @@ def _resolve_file_paths(file_paths: str) -> list[Path]:
         path = Path(item)
         candidates = [path]
         if not path.is_absolute():
-            candidates.append(project_root / path)
+            candidates.append(PROJECT_ROOT / path)
 
         resolved = next((candidate for candidate in candidates if candidate.exists()), None)
         if resolved is None:
@@ -94,9 +85,7 @@ def _resolve_file_paths(file_paths: str) -> list[Path]:
 
 def get_ragflow_client() -> RAGFlow:
     """创建 RAGFlow SDK 客户端。"""
-    api_key, base_url = _load_ragflow_env()
-    if not api_key or not base_url:
-        raise ValueError("RAGFLOW_API_KEY 或 RAGFLOW_API_URL 未配置，请检查 .env。")
+    api_key, base_url = load_ragflow_env()
     return RAGFlow(api_key=api_key, base_url=base_url)
 
 
@@ -438,9 +427,3 @@ def create_ask_delete(assistant_name: str, question: str) -> str:
         return answer
     except Exception as e:
         return f"提问助手失败: {e}"
-
-
-if __name__ == "__main__":
-    print(list_ragflow_datasets.invoke({}))
-    print()
-    print(get_assistant_list.invoke({}))

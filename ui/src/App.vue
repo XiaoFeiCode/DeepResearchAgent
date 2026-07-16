@@ -1,10 +1,25 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import axios from 'axios'
 
+import {
+  API_BASE,
+  WS_BASE,
+  authApi,
+  conversationApi,
+  fileApi,
+  getErrorMessage,
+  getErrorStatus,
+  registerUnauthorizedHandler,
+  removeResponseInterceptor,
+  setAccessToken,
+  taskApi,
+} from './api/client'
 import ChatPanel from './components/ChatPanel.vue'
 import WorkspaceDrawer from './components/WorkspaceDrawer.vue'
 import WorkspaceRail from './components/WorkspaceRail.vue'
+import { useImageAssets } from './composables/useImageAssets'
+import { useImageKnowledge } from './composables/useImageKnowledge'
+import { useRagflowKnowledge } from './composables/useRagflowKnowledge'
 import type {
   AgentStatus,
   ConversationSummary,
@@ -13,12 +28,8 @@ import type {
   ImageKnowledgeItem,
   Message,
   MessageAttachment,
-  RagflowDataset,
-  RagflowDocument,
 } from './types'
 
-const API_BASE = (import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000').replace(/\/$/, '')
-const WS_BASE = API_BASE.replace(/^http/, 'ws')
 const THREAD_STORAGE_KEY = 'deep-agent-thread-id'
 const AUTH_STORAGE_KEY = 'deep-agent-access-token'
 
@@ -43,21 +54,6 @@ const isSidebarOpen = ref(false)
 const drawerMode = ref<DrawerMode>('files')
 const fileList = ref<FileItem[]>([])
 const selectedFiles = ref<File[]>([])
-const ragflowDatasets = ref<RagflowDataset[]>([])
-const ragflowDocuments = ref<RagflowDocument[]>([])
-const selectedDatasetId = ref('')
-const selectedKbFiles = ref<File[]>([])
-const ragflowLoading = ref(false)
-const ragflowUploading = ref(false)
-const ragflowMessage = ref('')
-const ragflowError = ref('')
-const imageKnowledgeItems = ref<ImageKnowledgeItem[]>([])
-const selectedImageFiles = ref<File[]>([])
-const imageDescription = ref('')
-const imageKnowledgeLoading = ref(false)
-const imageKnowledgeUploading = ref(false)
-const imageKnowledgeMessage = ref('')
-const imageKnowledgeError = ref('')
 const authToken = ref(localStorage.getItem(AUTH_STORAGE_KEY) || '')
 const authUser = ref('')
 const loginUsername = ref('admin')
@@ -65,69 +61,56 @@ const loginPassword = ref('')
 const authLoading = ref(false)
 const authError = ref('')
 let reconnectTimer: number | undefined
-const imageObjectUrls = new Map<string, string>()
+
+const imageAssets = useImageAssets()
+const {
+  adoptAttachmentPreview,
+  createPendingAttachments,
+  hydrateImageItems,
+  hydrateMessages,
+  release: releaseImageAssets,
+  rememberImageMetadata,
+  resolveReferencedImages,
+} = imageAssets
+
+const {
+  datasets: ragflowDatasets,
+  deleteDocument: deleteKnowledgeDocument,
+  documents: ragflowDocuments,
+  error: ragflowError,
+  fetchDatasets: fetchRagflowDatasets,
+  handleFileChange: handleKbFileChange,
+  loading: ragflowLoading,
+  message: ragflowMessage,
+  parseDocument: parseKnowledgeDocument,
+  selectedDataset,
+  selectedDatasetId,
+  selectedFiles: selectedKbFiles,
+  selectDataset: selectRagflowDataset,
+  uploading: ragflowUploading,
+  uploadFiles: uploadKnowledgeFiles,
+} = useRagflowKnowledge()
+
+const {
+  deleteImage: deleteImageKnowledge,
+  description: imageDescription,
+  error: imageKnowledgeError,
+  fetchImages: fetchImageKnowledge,
+  handleFileChange: handleImageKnowledgeFileChange,
+  items: imageKnowledgeItems,
+  loading: imageKnowledgeLoading,
+  message: imageKnowledgeMessage,
+  selectedFiles: selectedImageFiles,
+  uploading: imageKnowledgeUploading,
+  uploadImages: uploadImageKnowledge,
+} = useImageKnowledge(imageAssets)
 
 const isAuthenticated = computed(() => authToken.value.length > 0)
-const selectedDataset = computed(() => ragflowDatasets.value.find((dataset) => dataset.id === selectedDatasetId.value))
 const canSend = computed(() => status.value !== 'running' && (inputQuery.value.trim().length > 0 || selectedFiles.value.length > 0))
 
 const applyAuthHeader = (token: string) => {
-  if (token) axios.defaults.headers.common.Authorization = `Bearer ${token}`
-  else delete axios.defaults.headers.common.Authorization
+  setAccessToken(token)
 }
-
-const releaseImageObjectUrls = () => {
-  for (const url of imageObjectUrls.values()) URL.revokeObjectURL(url)
-  imageObjectUrls.clear()
-}
-
-const hydrateImageItem = async (image: ImageKnowledgeItem): Promise<ImageKnowledgeItem> => {
-  const cachedUrl = imageObjectUrls.get(image.id)
-  if (cachedUrl) return { ...image, previewUrl: cachedUrl }
-
-  try {
-    const response = await axios.get(`${API_BASE}${image.content_url}`, {
-      responseType: 'blob',
-    })
-    const previewUrl = URL.createObjectURL(response.data)
-    imageObjectUrls.set(image.id, previewUrl)
-    return { ...image, previewUrl }
-  } catch (error) {
-    console.error(`Failed to load image preview: ${image.filename}`, error)
-    return image
-  }
-}
-
-const hydrateImageItems = (images: ImageKnowledgeItem[]) => Promise.all(images.map(hydrateImageItem))
-
-const attachmentCacheKey = (attachment: MessageAttachment) => `attachment:${attachment.content_url}`
-
-const hydrateAttachmentItem = async (
-  attachment: MessageAttachment,
-): Promise<MessageAttachment> => {
-  if (!attachment.content_type.startsWith('image/') || !attachment.content_url.startsWith('/api/')) {
-    return attachment
-  }
-  const cacheKey = attachmentCacheKey(attachment)
-  const cachedUrl = imageObjectUrls.get(cacheKey)
-  if (cachedUrl) return { ...attachment, previewUrl: cachedUrl }
-
-  try {
-    const response = await axios.get(`${API_BASE}${attachment.content_url}`, {
-      responseType: 'blob',
-    })
-    const previewUrl = URL.createObjectURL(response.data)
-    imageObjectUrls.set(cacheKey, previewUrl)
-    return { ...attachment, previewUrl }
-  } catch (error) {
-    console.error(`Failed to load attachment preview: ${attachment.name}`, error)
-    return attachment
-  }
-}
-
-const hydrateAttachmentItems = (attachments: MessageAttachment[]) => (
-  Promise.all(attachments.map(hydrateAttachmentItem))
-)
 
 const clearAuthState = () => {
   authToken.value = ''
@@ -138,15 +121,15 @@ const clearAuthState = () => {
   const websocket = socket.value
   socket.value = null
   websocket?.close()
-  releaseImageObjectUrls()
+  releaseImageAssets()
 }
 
 const validateToken = async () => {
   if (!authToken.value) return false
   applyAuthHeader(authToken.value)
   try {
-    const response = await axios.get(`${API_BASE}/api/auth/me`)
-    authUser.value = response.data.username
+    const data = await authApi.currentUser()
+    authUser.value = data.username
     return true
   } catch {
     clearAuthState()
@@ -158,21 +141,16 @@ const login = async () => {
   authLoading.value = true
   authError.value = ''
   try {
-    const formData = new URLSearchParams()
-    formData.set('username', loginUsername.value)
-    formData.set('password', loginPassword.value)
-    const response = await axios.post(`${API_BASE}/api/auth/token`, formData, {
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    })
-    authToken.value = response.data.access_token
+    const data = await authApi.login(loginUsername.value, loginPassword.value)
+    authToken.value = data.access_token
     localStorage.setItem(AUTH_STORAGE_KEY, authToken.value)
     applyAuthHeader(authToken.value)
     await validateToken()
     await fetchConversationMessages()
     await fetchConversations()
     connectWebSocket()
-  } catch (error: any) {
-    authError.value = error.response?.data?.detail || error.message || '登录失败'
+  } catch (error) {
+    authError.value = getErrorMessage(error, '登录失败')
   } finally {
     authLoading.value = false
   }
@@ -191,61 +169,43 @@ const logout = () => {
   status.value = 'idle'
 }
 
-axios.interceptors.response.use(
-  (response) => response,
-  (error) => {
-    const requestUrl = error.config?.url || ''
-    if (error.response?.status === 401 && !requestUrl.includes('/api/auth/token')) {
-      clearAuthState()
-      authError.value = '登录已过期，请重新登录'
-    }
-    return Promise.reject(error)
-  },
-)
+const authInterceptorId = registerUnauthorizedHandler(() => {
+  clearAuthState()
+  authError.value = '登录已过期，请重新登录'
+})
 
 const fetchConversationMessages = async (threadId = currentThreadId.value) => {
   try {
-    const response = await axios.get(
-      `${API_BASE}/api/conversations/${encodeURIComponent(threadId)}/messages`,
-    )
-    messages.value = (response.data.messages ?? []).map((message: any): Message => ({
+    const data = await conversationApi.messages(threadId)
+    messages.value = (data.messages ?? []).map((message: any): Message => ({
       role: message.role === 'assistant' ? 'ai' : message.role,
       content: message.content,
       images: message.metadata?.images ?? [],
       attachments: message.metadata?.attachments ?? [],
       timestamp: message.timestamp,
     }))
-    await Promise.all(
-      messages.value.map(async (message) => {
-        if (message.images?.length) message.images = await hydrateImageItems(message.images)
-        if (message.attachments?.length) {
-          message.attachments = await hydrateAttachmentItems(message.attachments)
-        }
-      }),
-    )
-  } catch (error: any) {
-    if (error.response?.status === 404) {
+    await hydrateMessages(messages.value)
+  } catch (error) {
+    if (getErrorStatus(error) === 404) {
       currentThreadId.value = crypto.randomUUID()
       sessionStorage.setItem(THREAD_STORAGE_KEY, currentThreadId.value)
       messages.value = []
       return
     }
-    if (error.response?.status !== 503) {
-      console.error('Failed to restore conversation history', error)
+    if (getErrorStatus(error) !== 503) {
+      console.error('恢复会话历史失败', error)
     }
   }
 }
 
 const fetchConversations = async () => {
   try {
-    const response = await axios.get(`${API_BASE}/api/conversations`, {
-      params: { limit: 100 },
-    })
-    conversations.value = (response.data.conversations ?? []).filter(
+    const data = await conversationApi.list()
+    conversations.value = (data.conversations ?? []).filter(
       (conversation: ConversationSummary) => conversation.title !== '新会话',
     )
-  } catch (error: any) {
-    if (error.response?.status !== 503) console.error('Failed to load conversations', error)
+  } catch (error) {
+    if (getErrorStatus(error) !== 503) console.error('加载会话列表失败', error)
   }
 }
 
@@ -268,9 +228,7 @@ const deleteConversation = async (conversation: ConversationSummary) => {
   if (!window.confirm(`确定删除会话“${conversation.title}”吗？删除后无法恢复。`)) return
 
   try {
-    await axios.delete(
-      `${API_BASE}/api/conversations/${encodeURIComponent(conversation.id)}`,
-    )
+    await conversationApi.remove(conversation.id)
     conversations.value = conversations.value.filter((item) => item.id !== conversation.id)
 
     if (conversation.id === currentThreadId.value) {
@@ -283,8 +241,8 @@ const deleteConversation = async (conversation: ConversationSummary) => {
       currentSessionUrl.value = ''
       connectWebSocket()
     }
-  } catch (error: any) {
-    const detail = error.response?.data?.detail || error.message || '未知错误'
+  } catch (error) {
+    const detail = getErrorMessage(error)
     messages.value.push({
       role: 'system',
       content: `删除会话失败：${detail}`,
@@ -296,75 +254,16 @@ const deleteConversation = async (conversation: ConversationSummary) => {
 const fetchFiles = async () => {
   if (!currentSessionPath.value) return
   try {
-    const response = await axios.get(`${API_BASE}/api/files`, {
-      params: { path: currentSessionPath.value },
-    })
-    if (response.data.files) {
-      fileList.value = response.data.files.map((file: FileItem) => ({
+    const data = await fileApi.list(currentSessionPath.value)
+    if (data.files) {
+      fileList.value = data.files.map((file: FileItem) => ({
         ...file,
         url: `${API_BASE}/api/download?path=${encodeURIComponent(file.path)}`,
       }))
     }
   } catch (error) {
-    console.error('Failed to fetch files', error)
+    console.error('读取会话文件失败', error)
   }
-}
-
-const showRagflowMessage = (message: string, isError = false) => {
-  ragflowMessage.value = isError ? '' : message
-  ragflowError.value = isError ? message : ''
-}
-
-const fetchRagflowDocuments = async (datasetId = selectedDatasetId.value) => {
-  if (!datasetId) {
-    ragflowDocuments.value = []
-    return
-  }
-
-  try {
-    ragflowLoading.value = true
-    const response = await axios.get(`${API_BASE}/api/ragflow/documents`, {
-      params: { dataset_name_or_id: datasetId },
-    })
-    if (response.data.error) {
-      showRagflowMessage(response.data.error, true)
-      ragflowDocuments.value = []
-      return
-    }
-    ragflowDocuments.value = response.data.documents ?? []
-  } catch (error: any) {
-    showRagflowMessage(`获取知识库文档失败：${error.message || '未知错误'}`, true)
-  } finally {
-    ragflowLoading.value = false
-  }
-}
-
-const fetchRagflowDatasets = async () => {
-  try {
-    ragflowLoading.value = true
-    showRagflowMessage('')
-    const response = await axios.get(`${API_BASE}/api/ragflow/datasets`)
-    if (response.data.error) {
-      showRagflowMessage(response.data.error, true)
-      ragflowDatasets.value = []
-      ragflowDocuments.value = []
-      return
-    }
-
-    ragflowDatasets.value = response.data.datasets ?? []
-    const stillExists = ragflowDatasets.value.some((dataset) => dataset.id === selectedDatasetId.value)
-    if (!stillExists) selectedDatasetId.value = ragflowDatasets.value[0]?.id ?? ''
-    if (selectedDatasetId.value) await fetchRagflowDocuments(selectedDatasetId.value)
-  } catch (error: any) {
-    showRagflowMessage(`获取知识库列表失败：${error.message || '未知错误'}`, true)
-  } finally {
-    ragflowLoading.value = false
-  }
-}
-
-const selectRagflowDataset = async (dataset: RagflowDataset) => {
-  selectedDatasetId.value = dataset.id
-  await fetchRagflowDocuments(dataset.id)
 }
 
 const openFilesDrawer = () => {
@@ -379,157 +278,10 @@ const openKnowledgeDrawer = () => {
   fetchRagflowDatasets()
 }
 
-const showImageKnowledgeMessage = (message: string, isError = false) => {
-  imageKnowledgeMessage.value = isError ? '' : message
-  imageKnowledgeError.value = isError ? message : ''
-}
-
-const fetchImageKnowledge = async () => {
-  try {
-    imageKnowledgeLoading.value = true
-    showImageKnowledgeMessage('')
-    const response = await axios.get(`${API_BASE}/api/image-knowledge/images`)
-    imageKnowledgeItems.value = await hydrateImageItems(response.data.images ?? [])
-  } catch (error: any) {
-    showImageKnowledgeMessage(
-      `读取图片知识库失败：${error.response?.data?.detail || error.message || '未知错误'}`,
-      true,
-    )
-  } finally {
-    imageKnowledgeLoading.value = false
-  }
-}
-
 const openImageKnowledgeDrawer = () => {
   drawerMode.value = 'images'
   isSidebarOpen.value = true
   fetchImageKnowledge()
-}
-
-const handleImageKnowledgeFileChange = (event: Event) => {
-  const target = event.target as HTMLInputElement
-  if (!target.files?.length) return
-  selectedImageFiles.value = [...selectedImageFiles.value, ...Array.from(target.files)]
-  target.value = ''
-}
-
-const uploadImageKnowledge = async () => {
-  if (!selectedImageFiles.value.length) return
-  try {
-    imageKnowledgeUploading.value = true
-    showImageKnowledgeMessage('')
-    const formData = new FormData()
-    formData.append('description', imageDescription.value)
-    selectedImageFiles.value.forEach((file) => formData.append('files', file))
-    const response = await axios.post(
-      `${API_BASE}/api/image-knowledge/images/upload`,
-      formData,
-      { headers: { 'Content-Type': 'multipart/form-data' } },
-    )
-    const count = response.data.images?.length ?? 0
-    selectedImageFiles.value = []
-    imageDescription.value = ''
-    showImageKnowledgeMessage(`已完成 ${count} 张图片的向量化和入库`)
-    await fetchImageKnowledge()
-  } catch (error: any) {
-    showImageKnowledgeMessage(
-      `图片入库失败：${error.response?.data?.detail || error.message || '未知错误'}`,
-      true,
-    )
-  } finally {
-    imageKnowledgeUploading.value = false
-  }
-}
-
-const deleteImageKnowledge = async (image: ImageKnowledgeItem) => {
-  if (!window.confirm(`确定从图片知识库删除“${image.filename}”吗？`)) return
-  try {
-    await axios.delete(`${API_BASE}/api/image-knowledge/images/${encodeURIComponent(image.id)}`)
-    const previewUrl = imageObjectUrls.get(image.id)
-    if (previewUrl) URL.revokeObjectURL(previewUrl)
-    imageObjectUrls.delete(image.id)
-    showImageKnowledgeMessage(`已删除图片：${image.filename}`)
-    await fetchImageKnowledge()
-  } catch (error: any) {
-    showImageKnowledgeMessage(
-      `删除图片失败：${error.response?.data?.detail || error.message || '未知错误'}`,
-      true,
-    )
-  }
-}
-
-const handleKbFileChange = (event: Event) => {
-  const target = event.target as HTMLInputElement
-  if (!target.files?.length) return
-  selectedKbFiles.value = [...selectedKbFiles.value, ...Array.from(target.files)]
-  target.value = ''
-}
-
-const uploadKnowledgeFiles = async () => {
-  if (!selectedDatasetId.value || selectedKbFiles.value.length === 0) return
-  try {
-    ragflowUploading.value = true
-    showRagflowMessage('')
-    const formData = new FormData()
-    formData.append('dataset_name_or_id', selectedDatasetId.value)
-    formData.append('parse_after_upload', 'true')
-    selectedKbFiles.value.forEach((file) => formData.append('files', file))
-
-    const response = await axios.post(`${API_BASE}/api/ragflow/documents/upload`, formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    })
-    if (response.data.error) {
-      showRagflowMessage(response.data.error, true)
-      return
-    }
-
-    const names = selectedKbFiles.value.map((file) => file.name).join('、')
-    selectedKbFiles.value = []
-    showRagflowMessage(`已上传并提交解析：${names}`)
-    await fetchRagflowDatasets()
-  } catch (error: any) {
-    showRagflowMessage(`上传到 RAGFlow 失败：${error.message || '未知错误'}`, true)
-  } finally {
-    ragflowUploading.value = false
-  }
-}
-
-const parseKnowledgeDocument = async (document: RagflowDocument) => {
-  if (!selectedDatasetId.value) return
-  try {
-    showRagflowMessage('')
-    const response = await axios.post(`${API_BASE}/api/ragflow/documents/parse`, {
-      dataset_name_or_id: selectedDatasetId.value,
-      document_names_or_ids: document.id,
-    })
-    if (response.data.error) {
-      showRagflowMessage(response.data.error, true)
-      return
-    }
-    showRagflowMessage(`已提交解析：${document.name}`)
-    await fetchRagflowDocuments()
-  } catch (error: any) {
-    showRagflowMessage(`解析文档失败：${error.message || '未知错误'}`, true)
-  }
-}
-
-const deleteKnowledgeDocument = async (document: RagflowDocument) => {
-  if (!selectedDatasetId.value || !window.confirm(`确定删除文档“${document.name}”吗？`)) return
-  try {
-    showRagflowMessage('')
-    const response = await axios.post(`${API_BASE}/api/ragflow/documents/delete`, {
-      dataset_name_or_id: selectedDatasetId.value,
-      document_names_or_ids: document.id,
-    })
-    if (response.data.error) {
-      showRagflowMessage(response.data.error, true)
-      return
-    }
-    showRagflowMessage(`已删除文档：${document.name}`)
-    await fetchRagflowDatasets()
-  } catch (error: any) {
-    showRagflowMessage(`删除文档失败：${error.message || '未知错误'}`, true)
-  }
 }
 
 const handleSocketMessage = (payload: any) => {
@@ -581,6 +333,7 @@ const handleSocketMessage = (payload: any) => {
 
   if (event === 'image_search_result' && lastAiMessage) {
     const images = (eventData.images ?? []) as ImageKnowledgeItem[]
+    rememberImageMetadata(images)
     lastAiMessage.images = images
     void hydrateImageItems(images).then((hydrated) => {
       lastAiMessage.images = hydrated
@@ -588,8 +341,17 @@ const handleSocketMessage = (payload: any) => {
   }
 
   if (event === 'task_result') {
-    if (lastAiMessage) lastAiMessage.content = eventData.result
-    else messages.value.push({ role: 'ai', content: eventData.result, timestamp: Date.now() })
+    let resultMessage = lastAiMessage
+    if (resultMessage) resultMessage.content = eventData.result
+    else {
+      resultMessage = { role: 'ai', content: eventData.result, timestamp: Date.now() }
+      messages.value.push(resultMessage)
+    }
+    void resolveReferencedImages([resultMessage]).then(async () => {
+      if (resultMessage?.images?.length) {
+        resultMessage.images = await hydrateImageItems(resultMessage.images)
+      }
+    })
     status.value = 'idle'
     fetchFiles()
     fetchConversations()
@@ -610,7 +372,7 @@ const connectWebSocket = () => {
     try {
       handleSocketMessage(JSON.parse(event.data))
     } catch (error) {
-      console.error('Error parsing WebSocket message', error)
+      console.error('解析 WebSocket 消息失败', error)
     }
   }
   websocket.onclose = () => {
@@ -618,22 +380,6 @@ const connectWebSocket = () => {
   }
   socket.value = websocket
 }
-
-const createPendingAttachments = (files: File[]): MessageAttachment[] => files.map((file) => {
-  const contentUrl = `pending:${crypto.randomUUID()}`
-  const attachment: MessageAttachment = {
-    name: file.name,
-    content_type: file.type || 'application/octet-stream',
-    size: file.size,
-    content_url: contentUrl,
-  }
-  if (file.type.startsWith('image/')) {
-    const previewUrl = URL.createObjectURL(file)
-    imageObjectUrls.set(attachmentCacheKey(attachment), previewUrl)
-    attachment.previewUrl = previewUrl
-  }
-  return attachment
-})
 
 const uploadSelectedFiles = async (
   aiMessage: Message,
@@ -648,13 +394,8 @@ const uploadSelectedFiles = async (
     timestamp: new Date().toLocaleTimeString(),
   })
 
-  const formData = new FormData()
-  formData.append('thread_id', currentThreadId.value)
-  selectedFiles.value.forEach((file) => formData.append('files', file))
-  const response = await axios.post(`${API_BASE}/api/upload`, formData, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  })
-  const attachments = (response.data.files ?? []).map((item: any, index: number) => {
+  const data = await fileApi.upload(currentThreadId.value, selectedFiles.value)
+  const attachments = (data.files ?? []).map((item: any, index: number) => {
     const pending = pendingAttachments[index]
     const attachment: MessageAttachment = typeof item === 'string'
       ? {
@@ -664,11 +405,7 @@ const uploadSelectedFiles = async (
           content_url: `/api/uploads/${encodeURIComponent(currentThreadId.value)}/${encodeURIComponent(item)}`,
         }
       : item
-    if (pending?.previewUrl) {
-      imageObjectUrls.delete(attachmentCacheKey(pending))
-      imageObjectUrls.set(attachmentCacheKey(attachment), pending.previewUrl)
-      attachment.previewUrl = pending.previewUrl
-    }
+    adoptAttachmentPreview(pending, attachment)
     return attachment
   })
   selectedFiles.value = []
@@ -695,17 +432,13 @@ const sendMessage = async () => {
   try {
     const attachments = await uploadSelectedFiles(aiMessage, pendingAttachments)
     userMessage.attachments = attachments
-    const response = await axios.post(`${API_BASE}/api/task`, {
-      query,
-      thread_id: currentThreadId.value,
-      attachment_names: attachments.map((attachment) => attachment.name),
-    })
-    if (response.data?.thread_id) {
-      currentThreadId.value = response.data.thread_id
+    const data = await taskApi.start(query, currentThreadId.value, attachments)
+    if (data?.thread_id) {
+      currentThreadId.value = data.thread_id
       sessionStorage.setItem(THREAD_STORAGE_KEY, currentThreadId.value)
     }
-  } catch (error: any) {
-    messages.value.push({ role: 'system', content: `请求失败：${error.message || '未知错误'}`, timestamp: Date.now() })
+  } catch (error) {
+    messages.value.push({ role: 'system', content: `请求失败：${getErrorMessage(error)}`, timestamp: Date.now() })
     status.value = 'idle'
   }
 }
@@ -719,11 +452,7 @@ const handleFileChange = (event: Event) => {
 
 const downloadFile = async (file: FileItem) => {
   try {
-    const response = await axios.get(`${API_BASE}/api/download`, {
-      params: { path: file.path },
-      responseType: 'blob',
-    })
-    const blobUrl = URL.createObjectURL(response.data)
+    const blobUrl = URL.createObjectURL(await fileApi.download(file.path))
     const link = document.createElement('a')
     link.href = blobUrl
     link.download = file.name
@@ -731,8 +460,8 @@ const downloadFile = async (file: FileItem) => {
     link.click()
     link.remove()
     URL.revokeObjectURL(blobUrl)
-  } catch (error: any) {
-    messages.value.push({ role: 'system', content: `下载失败：${error.message || '未知错误'}`, timestamp: Date.now() })
+  } catch (error) {
+    messages.value.push({ role: 'system', content: `下载失败：${getErrorMessage(error)}`, timestamp: Date.now() })
   }
 }
 
@@ -759,11 +488,12 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  removeResponseInterceptor(authInterceptorId)
   if (reconnectTimer) window.clearTimeout(reconnectTimer)
   const websocket = socket.value
   socket.value = null
   websocket?.close()
-  releaseImageObjectUrls()
+  releaseImageAssets()
 })
 </script>
 
@@ -771,7 +501,7 @@ onBeforeUnmount(() => {
   <main v-if="!isAuthenticated" class="auth-page">
     <form class="auth-card" @submit.prevent="login">
       <span class="eyebrow">Secure Console</span>
-      <h1>登录 DeepAgent Studio</h1>
+      <h1>登录 OmniResearch</h1>
       <p>访问任务执行、知识库管理和会话文件前，需要先通过 API 鉴权。</p>
 
       <label>
@@ -808,7 +538,7 @@ onBeforeUnmount(() => {
     <main class="conversation-pane">
       <header class="topbar">
         <div class="conversation-title">
-          <h1>DeepAgent</h1>
+          <h1>OmniResearch</h1>
           <span class="run-status" :class="status">{{ status === 'running' ? '执行中' : '就绪' }}</span>
         </div>
         <div class="mobile-toolbar">

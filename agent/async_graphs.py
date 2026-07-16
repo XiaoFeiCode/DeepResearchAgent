@@ -1,4 +1,4 @@
-"""LangGraph deployment graphs for native DeepAgents async subagents."""
+"""供 LangGraph 部署的 DeepAgents 原生异步子智能体图。"""
 
 import shutil
 
@@ -14,7 +14,7 @@ from skills.registry import PROJECT_ROOT, SKILL_ASSIGNMENTS
 
 
 def _prepare_worker_skill_source(target_agent: str):
-    """Build an isolated, read-only local skill source for one async worker."""
+    """为异步 Worker 构建隔离、只读的本地 Skill 源。"""
     source_root = PROJECT_ROOT / "runtime" / "async_skill_sources" / target_agent
     if source_root.exists():
         shutil.rmtree(source_root)
@@ -40,7 +40,7 @@ def _prepare_worker_skill_source(target_agent: str):
 
 
 def _build_worker(spec: dict, target_agent: str):
-    """Turn an inline subagent specification into a skill-aware deployable graph."""
+    """把内联子智能体配置转换为支持 Skill 的可部署图。"""
     return create_deep_agent(
         model=spec.get("model", model),
         tools=spec.get("tools", []),
@@ -58,8 +58,8 @@ def _build_worker(spec: dict, target_agent: str):
     )
 
 
-# These workers are registered independently in langgraph.json. Each async run
-# receives its own thread and state instead of sharing the supervisor context.
+# 这些 Worker 在 langgraph.json 中独立注册，每次异步运行都使用自己的线程和状态，
+# 不与 Supervisor 共享上下文。
 internet_research_graph = _build_worker(internet_sub_agent, "internet")
 ragflow_research_graph = _build_worker(rag_sub_agent, "ragflow")
 database_research_graph = _build_worker(database_query_agent, "database")

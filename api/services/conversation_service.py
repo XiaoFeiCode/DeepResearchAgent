@@ -1,18 +1,18 @@
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import Column, JSON, Text, delete, inspect, text
 from sqlmodel import Field, Session, SQLModel, select
 
+from core.settings import get_settings
 from tools.database.mysql import get_engine
 
 logger = logging.getLogger(__name__)
 
 
 class ConversationAccessError(LookupError):
-    """Raised when a conversation does not belong to the current user."""
+    """会话不属于当前用户时抛出。"""
 
 
 def utc_now() -> datetime:
@@ -181,63 +181,102 @@ class ConversationService:
         return self._engine
 
     def _migrate_conversation_schema(self) -> None:
-        """为旧版会话表补充 user_id，避免 create_all 无法修改已有表。"""
+        """升级旧版会话表的用户归属和 Unicode 字符集。"""
         engine = self._engine
         if engine is None:
             raise RuntimeError("MySQL conversation memory is unavailable")
         schema = inspect(engine)
-        if "agent_conversations" not in schema.get_table_names():
+        table_names = set(schema.get_table_names())
+        if "agent_conversations" not in table_names:
             return
 
         columns = {column["name"] for column in schema.get_columns("agent_conversations")}
-        if "user_id" in columns:
-            return
-
-        legacy_user = (
-            os.getenv("CONVERSATION_LEGACY_USER_ID")
-            or os.getenv("API_ADMIN_USERNAME")
-            or "admin"
-        )[:64]
         dialect = engine.dialect.name
         with engine.begin() as connection:
+            if "user_id" not in columns:
+                settings = get_settings()
+                legacy_user = (
+                    settings.conversation_legacy_user_id
+                    or settings.api_admin_username
+                )[:64]
+                if dialect == "mysql":
+                    connection.execute(
+                        text(
+                            "ALTER TABLE agent_conversations "
+                            "ADD COLUMN user_id VARCHAR(64) NULL"
+                        )
+                    )
+                    connection.execute(
+                        text(
+                            "UPDATE agent_conversations "
+                            "SET user_id = :legacy_user WHERE user_id IS NULL"
+                        ),
+                        {"legacy_user": legacy_user},
+                    )
+                    connection.execute(
+                        text(
+                            "ALTER TABLE agent_conversations "
+                            "MODIFY COLUMN user_id VARCHAR(64) NOT NULL"
+                        )
+                    )
+                else:
+                    connection.execute(
+                        text(
+                            "ALTER TABLE agent_conversations "
+                            "ADD COLUMN user_id VARCHAR(64) NOT NULL "
+                            "DEFAULT 'admin'"
+                        )
+                    )
+                    connection.execute(
+                        text("UPDATE agent_conversations SET user_id = :legacy_user"),
+                        {"legacy_user": legacy_user},
+                    )
+                connection.execute(
+                    text(
+                        "CREATE INDEX ix_agent_conversations_user_id "
+                        "ON agent_conversations (user_id)"
+                    )
+                )
+
             if dialect == "mysql":
-                connection.execute(
-                    text(
-                        "ALTER TABLE agent_conversations "
-                        "ADD COLUMN user_id VARCHAR(64) NULL"
-                    )
-                )
-                connection.execute(
-                    text(
-                        "UPDATE agent_conversations "
-                        "SET user_id = :legacy_user WHERE user_id IS NULL"
-                    ),
-                    {"legacy_user": legacy_user},
-                )
-                connection.execute(
-                    text(
-                        "ALTER TABLE agent_conversations "
-                        "MODIFY COLUMN user_id VARCHAR(64) NOT NULL"
-                    )
-                )
-            else:
-                connection.execute(
-                    text(
-                        "ALTER TABLE agent_conversations "
-                        "ADD COLUMN user_id VARCHAR(64) NOT NULL "
-                        "DEFAULT 'admin'"
-                    )
-                )
-                connection.execute(
-                    text("UPDATE agent_conversations SET user_id = :legacy_user"),
-                    {"legacy_user": legacy_user},
-                )
-            connection.execute(
+                self._ensure_mysql_utf8mb4(connection, table_names)
+
+    @staticmethod
+    def _ensure_mysql_utf8mb4(connection, table_names: set[str]) -> None:
+        """仅转换无法保存四字节 Unicode 字符的旧文本列。"""
+        # 暂停外键检查后先转换子表再转换父表，避免 MySQL 因临时字符集不一致而拒绝转换。
+        managed_tables = ("agent_messages", "agent_conversations")
+        incompatible_tables: list[str] = []
+        for table_name in managed_tables:
+            if table_name not in table_names:
+                continue
+            incompatible_columns = connection.execute(
                 text(
-                    "CREATE INDEX ix_agent_conversations_user_id "
-                    "ON agent_conversations (user_id)"
+                    "SELECT COUNT(*) FROM information_schema.COLUMNS "
+                    "WHERE TABLE_SCHEMA = DATABASE() "
+                    "AND TABLE_NAME = :table_name "
+                    "AND CHARACTER_SET_NAME IS NOT NULL "
+                    "AND CHARACTER_SET_NAME <> 'utf8mb4'"
+                ),
+                {"table_name": table_name},
+            ).scalar_one()
+            if incompatible_columns:
+                incompatible_tables.append(table_name)
+
+        if not incompatible_tables:
+            return
+
+        connection.execute(text("SET FOREIGN_KEY_CHECKS = 0"))
+        try:
+            for table_name in incompatible_tables:
+                connection.execute(
+                    text(
+                        f"ALTER TABLE `{table_name}` CONVERT TO CHARACTER SET utf8mb4 "
+                        "COLLATE utf8mb4_unicode_ci"
+                    )
                 )
-            )
+        finally:
+            connection.execute(text("SET FOREIGN_KEY_CHECKS = 1"))
 
     @staticmethod
     def _make_title(content: str) -> str:

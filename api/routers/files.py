@@ -31,7 +31,7 @@ async def get_uploaded_file(
     request: Request,
     current_user: AuthenticatedUser = Security(check_rbac, scopes=["files"]),
 ):
-    """Return a persisted chat attachment after verifying conversation ownership."""
+    """校验会话归属后返回已持久化的聊天附件。"""
     conversation_service: ConversationService = request.app.state.conversation_service
     if not conversation_service.available:
         raise HTTPException(status_code=503, detail="会话存储不可用")

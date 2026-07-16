@@ -1,100 +1,60 @@
-from contextvars import ContextVar
-from typing import Any, Optional
+"""基于 ContextVar 的请求级运行上下文。"""
 
-# =================================================================================================
-# 核心知识点: ContextVars (上下文变量)
-# =================================================================================================
-# Q: 为什么我们需要 ContextVar？为什么不能直接用全局变量？
-#
-# A: 在开发异步 Web 服务 (如 FastAPI) 时，系统是 "并发" 处理多个用户请求的。
-#    但在 Python 的 asyncio 机制下，这些并发请求通常运行在 *同一个线程 (Thread)* 中。
-#
-#    1. 如果使用全局变量 (Global Variable):
-#       当 User A 的请求正在处理时，User B 的请求进来了。如果修改了全局变量，User A 的数据
-#       就会被 User B 覆盖，导致严重的 "串台" 事故（例如 User A 的文件存到了 User B 的目录）。
-#
-#    2. 如果使用 threading.local:
-#       它是基于线程隔离的。因为 asyncio 所有协程都在同一个线程跑，所以 threading.local
-#       在异步场景下失效，无法隔离不同用户的请求。
-#
-#    3. ContextVar 的解决方案:
-#       ContextVar 是 Python 3.7+ 专门为异步编程设计的 "协程级局部变量"。
-#       它能确保变量在每一个 asyncio Task (即每个用户请求) 中是 *独立隔离* 的。
-#       无论代码调用多深，只要是在同一个请求链路（Context）中，get() 到的都是属于当前请求的数据。
-# =================================================================================================
+from __future__ import annotations
 
+from contextvars import ContextVar, Token
+from typing import Any
 
-# 定义 ContextVar 上下文变量
-# -------------------------------------------------------------------------
-# 这里的变量名只是一个标识符 (Identifier)，真正的值是存储在当前的 Context 环境中的。
-
-# - 作用 ：用来记录 “当前是谁在执行任务” 。
-# - 场景 ：当 Agent 打印日志或者通过 WebSocket 给前端发消息时，它需要知道：“我现在是正在服务张三，还是李四？” 这样消息才不会发错人。
-_session_dir_ctx: ContextVar[Optional[str]] = ContextVar("session_dir", default=None)
-
-# - 作用 ：用来记录 “当前是谁在执行任务” 。
-# - 场景 ：当 Agent 打印日志或者通过 WebSocket 给前端发消息时，它需要知道：“我现在是正在服务张三，还是李四？” 这样消息才不会发错人。
-_thread_id_ctx: ContextVar[Optional[str]] = ContextVar("thread_id", default=None)
-_user_id_ctx: ContextVar[Optional[str]] = ContextVar("user_id", default=None)
+_session_dir_ctx: ContextVar[str | None] = ContextVar("session_dir", default=None)
+_thread_id_ctx: ContextVar[str | None] = ContextVar("thread_id", default=None)
+_user_id_ctx: ContextVar[str | None] = ContextVar("user_id", default=None)
 _result_metadata_ctx: ContextVar[dict[str, Any] | None] = ContextVar(
     "result_metadata",
     default=None,
 )
 
 
-def set_session_context(path: str):
-    """
-    设置当前请求链路的会话目录。
-    通常在 Agent 开始执行任务前调用。
-
-    Returns:
-        Token: 返回一个 Token 对象，后续可用它来恢复(reset)变量状态。
-    """
+def set_session_context(path: str) -> Token[str | None]:
+    """绑定当前任务的会话工作目录。"""
     return _session_dir_ctx.set(path)
 
 
-def get_session_context() -> Optional[str]:
-    """
-    获取当前请求链路的会话目录。
-    可以在任何深层调用的工具函数中直接使用，无需层层传递参数。
-    """
+def get_session_context() -> str | None:
+    """获取当前任务的会话工作目录。"""
     return _session_dir_ctx.get()
 
 
-def set_thread_context(thread_id: str):
-    """
-    设置当前请求链路的 Thread ID。
-    """
+def set_thread_context(thread_id: str) -> Token[str | None]:
+    """绑定当前任务的线程标识。"""
     return _thread_id_ctx.set(thread_id)
 
 
-def get_thread_context() -> Optional[str]:
-    """
-    获取当前请求链路的 Thread ID。
-    """
+def get_thread_context() -> str | None:
+    """获取当前任务的线程标识。"""
     return _thread_id_ctx.get()
 
 
-def set_user_context(user_id: str):
-    """设置当前异步任务对应的登录用户。"""
+def set_user_context(user_id: str) -> Token[str | None]:
+    """绑定当前任务的登录用户。"""
     return _user_id_ctx.set(user_id)
 
 
-def get_user_context() -> Optional[str]:
-    """获取当前异步任务对应的登录用户。"""
+def get_user_context() -> str | None:
+    """获取当前任务的登录用户。"""
     return _user_id_ctx.get()
 
 
-def set_result_metadata_context():
-    """为当前 Agent 任务创建结构化结果容器。"""
+def set_result_metadata_context() -> Token[dict[str, Any] | None]:
+    """为当前任务创建结构化结果容器。"""
     return _result_metadata_ctx.set({})
 
 
 def add_result_images(images: list[dict[str, Any]]) -> None:
-    """记录图片检索结果，供任务结束后写入 MySQL 消息元数据。"""
+    """记录图片检索结果，供任务结束后持久化。"""
     metadata = _result_metadata_ctx.get()
     if metadata is None:
         return
+
     current = metadata.setdefault("images", [])
     existing_ids = {item.get("id") for item in current}
     for image in images:
@@ -104,24 +64,25 @@ def add_result_images(images: list[dict[str, Any]]) -> None:
 
 
 def get_result_metadata() -> dict[str, Any]:
+    """返回当前任务结构化结果的浅拷贝。"""
     metadata = _result_metadata_ctx.get() or {}
-    return {key: list(value) if isinstance(value, list) else value for key, value in metadata.items()}
+    return {
+        key: list(value) if isinstance(value, list) else value
+        for key, value in metadata.items()
+    }
 
 
-def reset_session_context(
-    session_token,
-    thread_token=None,
-    user_token=None,
-    result_metadata_token=None,
-):
-    """
-    清理/重置上下文。
-    通常在请求处理结束 (finally 块) 中调用，防止内存泄漏或污染后续请求。
-    """
+def reset_request_context(
+    session_token: Token[str | None],
+    thread_token: Token[str | None] | None = None,
+    user_token: Token[str | None] | None = None,
+    result_metadata_token: Token[dict[str, Any] | None] | None = None,
+) -> None:
+    """恢复任务开始前的上下文，防止并发请求相互污染。"""
     _session_dir_ctx.reset(session_token)
-    if thread_token:
+    if thread_token is not None:
         _thread_id_ctx.reset(thread_token)
-    if user_token:
+    if user_token is not None:
         _user_id_ctx.reset(user_token)
     if result_metadata_token is not None:
         _result_metadata_ctx.reset(result_metadata_token)

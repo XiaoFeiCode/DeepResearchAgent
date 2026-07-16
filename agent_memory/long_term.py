@@ -1,16 +1,15 @@
-"""User-scoped long-term memory backed by Milvus."""
+"""基于 Milvus、按用户隔离的长期记忆。"""
+
+# ruff: noqa: E402
 
 from __future__ import annotations
 
 import json
-import os
 import threading
 import uuid
 import warnings
 from datetime import datetime, timezone
 from typing import Any
-
-from dotenv import find_dotenv, load_dotenv
 
 warnings.filterwarnings(
     "ignore",
@@ -21,12 +20,11 @@ warnings.filterwarnings(
 from pymilvus import DataType, MilvusClient  # noqa: E402
 
 from agent_memory.inference import MemoryInference
-
-load_dotenv(find_dotenv())
+from core.settings import get_settings
 
 
 class LongTermMemory:
-    """Store reusable user facts and retrieve them by vector similarity."""
+    """保存可复用的用户信息，并按向量相似度召回。"""
 
     def __init__(self) -> None:
         self._client: MilvusClient | None = None
@@ -35,11 +33,11 @@ class LongTermMemory:
 
     @property
     def collection_name(self) -> str:
-        return os.getenv("MILVUS_MEMORY_COLLECTION", "agent_long_term_memory")
+        return get_settings().milvus_memory_collection
 
     @property
     def dimension(self) -> int:
-        return int(os.getenv("MEMORY_VECTOR_DIMENSION", "512"))
+        return get_settings().memory_vector_dimension
 
     @property
     def inference(self) -> MemoryInference:
@@ -52,8 +50,9 @@ class LongTermMemory:
             if self._client is not None:
                 return
 
-            uri = os.getenv("MILVUS_URI", "http://127.0.0.1:19531")
-            token = os.getenv("MILVUS_TOKEN")
+            settings = get_settings()
+            uri = settings.milvus_uri
+            token = settings.milvus_token
             self._client = MilvusClient(uri=uri, token=token) if token else MilvusClient(uri=uri)
 
             if self._client.has_collection(self.collection_name):
@@ -132,7 +131,7 @@ class LongTermMemory:
         return {key: value for key, value in record.items() if key != "vector"}
 
     def delete(self, *, user_id: str, memory_id: str) -> None:
-        """Delete one user-owned memory."""
+        """删除一条属于指定用户的记忆。"""
         self.initialize()
         assert self._client is not None
         self._client.delete(
@@ -174,7 +173,7 @@ class LongTermMemory:
             ],
             search_params={"metric_type": "COSINE", "params": {"ef": 64}},
         )
-        threshold = float(os.getenv("MEMORY_MIN_SIMILARITY", "0.12"))
+        threshold = get_settings().memory_min_similarity
         memories: list[dict[str, Any]] = []
         for hit in results[0] if results else []:
             score = float(hit.get("distance", 0.0))

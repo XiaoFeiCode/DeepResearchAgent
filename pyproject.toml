@@ -1,10 +1,11 @@
 [project]
-name = "deep-agent-project"
+name = "omniresearch"
 version = "0.1.0"
-description = "A multi-agent deep research workspace with database, RAGFlow, web search, and document tools."
+description = "A multi-agent multimodal deep research system for databases, enterprise knowledge, web search, and files."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "daytona>=0.194.0",
     "deepagents>=0.5.0,<0.6.0",
     "fastapi~=0.129.2",
     "httpx~=0.28.1",
@@ -13,18 +14,21 @@ dependencies = [
     "langchain-daytona>=0.0.4",
     "langchain-openai~=1.1.10",
     "langgraph-checkpoint-redis>=0.5.0",
-    "markdown~=3.10.2",
+    "markdown-it-py>=4.2.0",
     "mysql-connector-python~=9.6.0",
+    "openinference-instrumentation-langchain>=0.1.67",
     "openpyxl~=3.1.5",
+    "opentelemetry-exporter-otlp-proto-http>=1.43.0",
+    "opentelemetry-sdk>=1.43.0",
     "pandas~=3.0.1",
     "pillow~=11.3.0",
     "pydantic~=2.12.5",
+    "pydantic-settings~=2.12.0",
     "pymilvus~=2.4.9",
     "pypdf~=6.7.2",
     "python-docx~=1.2.0",
     "python-dotenv~=1.2.1",
     "python-multipart~=0.0.22",
-    "pywin32==312; sys_platform == 'win32'",
     "pyyaml~=6.0.3",
     "ragflow-sdk~=0.24.0",
     "requests~=2.34.2",
@@ -32,6 +36,7 @@ dependencies = [
     "sqlalchemy~=2.0.46",
     "sqlmodel~=0.0.38",
     "tavily-python~=0.7.21",
+    "typst>=0.15.0",
     "uvicorn[standard]~=0.41.0",
     "xlrd~=2.0.1",
 ]

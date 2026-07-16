@@ -1,10 +1,9 @@
-"""User-scoped image knowledge base backed by Milvus and local files."""
+"""基于 Milvus 和本地文件、按用户隔离的图片知识库。"""
 
 from __future__ import annotations
 
 import hashlib
 import json
-import os
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -13,6 +12,7 @@ from typing import Any
 
 from pymilvus import DataType, MilvusClient
 
+from core.settings import get_settings
 from image_knowledge.embedding import (
     MultimodalEmbeddingClient,
     prepare_image_for_embedding,
@@ -29,14 +29,11 @@ class ImageKnowledgeStore:
 
     @property
     def collection_name(self) -> str:
-        return os.getenv(
-            "MILVUS_IMAGE_COLLECTION",
-            "multimodal_image_knowledge",
-        )
+        return get_settings().milvus_image_collection
 
     @property
     def dimension(self) -> int:
-        return int(os.getenv("MULTIMODAL_EMBEDDING_DIMENSION", "1024"))
+        return get_settings().multimodal_embedding_dimension
 
     @property
     def embedding(self) -> MultimodalEmbeddingClient:
@@ -49,8 +46,9 @@ class ImageKnowledgeStore:
             if self._client is not None:
                 return
 
-            uri = os.getenv("MILVUS_URI", "http://127.0.0.1:19531")
-            token = os.getenv("MILVUS_TOKEN")
+            settings = get_settings()
+            uri = settings.milvus_uri
+            token = settings.milvus_token
             self._client = (
                 MilvusClient(uri=uri, token=token)
                 if token
@@ -184,7 +182,7 @@ class ImageKnowledgeStore:
             search_params={"metric_type": "COSINE", "params": {"ef": 64}},
         )
 
-        threshold = float(os.getenv("MULTIMODAL_SEARCH_MIN_SIMILARITY", "0.2"))
+        threshold = get_settings().multimodal_search_min_similarity
         matches: list[dict[str, Any]] = []
         for hit in result[0] if result else []:
             score = float(hit.get("distance", 0.0))

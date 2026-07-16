@@ -29,7 +29,7 @@ const emit = defineEmits<{
         </svg>
       </div>
       <div>
-        <strong>DeepAgent</strong>
+        <strong>OmniResearch</strong>
       </div>
     </div>
 

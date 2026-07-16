@@ -1,9 +1,12 @@
+import logging
+
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from api.monitor import manager
 from api.security import require_websocket_token
 
 router = APIRouter(tags=["websocket"])
+logger = logging.getLogger(__name__)
 
 
 @router.websocket("/ws/{thread_id}")
@@ -19,5 +22,5 @@ async def websocket_endpoint(websocket: WebSocket, thread_id: str):
     except WebSocketDisconnect:
         manager.disconnect(websocket, thread_id)
     except Exception as error:
-        print(f"[WebSocket] 连接异常: {error}")
+        logger.warning("WebSocket 连接异常：%s", error)
         manager.disconnect(websocket, thread_id)

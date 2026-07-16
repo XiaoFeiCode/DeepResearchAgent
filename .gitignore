@@ -22,6 +22,7 @@ env/
 runtime/
 output/
 updated/
+tmp/
 test_session_*/
 *.sqlite
 *.sqlite-shm
@@ -37,14 +38,8 @@ logs/
 .coverage
 htmlcov/
 
-# RAGFlow source documents stay local. Keep Python integration code tracked.
-ragflow/**/*.pdf
-ragflow/**/*.docx
-ragflow/**/*.doc
-ragflow/**/*.xlsx
-ragflow/**/*.xls
-ragflow/**/*.csv
-ragflow/**/*.txt
+# RAGFlow 原始资料只保存在本机，不作为项目源码提交。
+/ragflow/
 
 # Frontend dependencies and build output
 node_modules/

@@ -1,11 +1,14 @@
 import asyncio
 import datetime
+import logging
 from concurrent.futures import Future
 from typing import Any
 
 from fastapi import WebSocket
 
 from api.context import get_thread_context
+
+logger = logging.getLogger(__name__)
 
 
 class ToolMonitor:
@@ -43,8 +46,7 @@ class ToolMonitor:
         if self.websocket_manager and thread_id:
             self.websocket_manager.publish(thread_id, payload)
 
-        # 控制台保底输出，方便没有前端连接时调试。
-        print(f"\n[Monitor:{event_type}] {message}")
+        logger.info("执行事件：type=%s message=%s", event_type, message)
 
     def report_tool(
         self,
@@ -73,6 +75,10 @@ class ToolMonitor:
     def report_task_result(self, result: str) -> None:
         """报告任务最终结果。"""
         self._emit("task_result", "任务执行完成", {"result": result})
+
+    def report_error(self, message: str) -> None:
+        """报告任务执行异常。"""
+        self._emit("error", message)
 
     def report_image_results(self, images: list[dict[str, Any]]) -> None:
         """报告多模态图片检索结果，供前端显示缩略图。"""
@@ -107,20 +113,20 @@ class ConnectionManager:
         """在 FastAPI lifespan 中绑定服务事件循环。"""
         self.loop = loop
         monitor.set_websocket_manager(self)
-        print(f"[Monitor] ConnectionManager bound to loop: {id(loop)}")
+        logger.info("WebSocket 管理器已绑定事件循环：%s", id(loop))
 
     async def connect(self, websocket: WebSocket, thread_id: str) -> None:
         """接收前端 WebSocket 连接，并按 thread_id 保存。"""
         await websocket.accept()
         self.active_connections[thread_id] = websocket
-        print(f"Client connected: {thread_id}")
+        logger.info("WebSocket 客户端已连接：thread_id=%s", thread_id)
 
     def disconnect(self, websocket: WebSocket, thread_id: str) -> None:
         """断开连接；只删除当前 websocket，避免覆盖新连接。"""
         current = self.active_connections.get(thread_id)
         if current is websocket:
             del self.active_connections[thread_id]
-        print(f"Client disconnected: {thread_id}")
+        logger.info("WebSocket 客户端已断开：thread_id=%s", thread_id)
 
     def publish(self, thread_id: str, message: dict[str, Any]) -> None:
         """
@@ -162,10 +168,6 @@ class ConnectionManager:
         self._threadsafe_futures.add(future)
         future.add_done_callback(self._finish_threadsafe_future)
 
-    async def send_personal_message(self, message: str, websocket: WebSocket) -> None:
-        """保留给直接向某个 WebSocket 发送文本消息的场景。"""
-        await websocket.send_text(message)
-
     async def send_to_thread(self, message: dict[str, Any], thread_id: str) -> None:
         """真正执行 WebSocket JSON 发送。"""
         websocket = self.active_connections.get(thread_id)
@@ -203,10 +205,10 @@ class ConnectionManager:
         try:
             error = task.exception()
         except Exception as error:
-            print(f"[Monitor] WebSocket send failed: {error}")
+            logger.warning("WebSocket 发送任务检查失败：%s", error)
             return
         if error is not None:
-            print(f"[Monitor] WebSocket send failed: {error}")
+            logger.warning("WebSocket 发送失败：%s", error)
 
     def _finish_threadsafe_future(self, future: Future) -> None:
         self._threadsafe_futures.discard(future)
@@ -215,10 +217,10 @@ class ConnectionManager:
         try:
             error = future.exception()
         except Exception as error:
-            print(f"[Monitor] WebSocket send failed: {error}")
+            logger.warning("跨线程 WebSocket 任务检查失败：%s", error)
             return
         if error is not None:
-            print(f"[Monitor] WebSocket send failed: {error}")
+            logger.warning("跨线程 WebSocket 发送失败：%s", error)
 
 
 monitor = ToolMonitor()

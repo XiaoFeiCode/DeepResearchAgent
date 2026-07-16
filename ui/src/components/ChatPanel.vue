@@ -6,6 +6,11 @@ import type { AgentStatus, FileItem, ImageKnowledgeItem, Message } from '../type
 import { formatTime, getFileTag } from '../utils/formatters'
 import ExecutionProcess from './ExecutionProcess.vue'
 
+marked.setOptions({
+  gfm: true,
+  breaks: false,
+})
+
 const props = defineProps<{
   messages: Message[]
   status: AgentStatus

@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from sqlalchemy import create_engine, inspect, text
 from sqlmodel import SQLModel
@@ -96,6 +96,34 @@ class ConversationServiceTests(unittest.TestCase):
                 self.assertEqual(service.list_conversations("other-user"), [])
             finally:
                 engine.dispose()
+
+    def test_mysql_charset_migration_converts_only_incompatible_tables(self):
+        connection = Mock()
+        first_result = Mock()
+        first_result.scalar_one.return_value = 1
+        second_result = Mock()
+        second_result.scalar_one.return_value = 0
+        connection.execute.side_effect = [
+            first_result,
+            second_result,
+            Mock(),
+            Mock(),
+            Mock(),
+        ]
+
+        ConversationService._ensure_mysql_utf8mb4(
+            connection,
+            {"agent_conversations", "agent_messages", "unmanaged_table"},
+        )
+
+        statements = [str(call.args[0]) for call in connection.execute.call_args_list]
+        self.assertEqual(len(statements), 5)
+        self.assertIn("information_schema.COLUMNS", statements[0])
+        self.assertIn("information_schema.COLUMNS", statements[1])
+        self.assertEqual(statements[2], "SET FOREIGN_KEY_CHECKS = 0")
+        self.assertIn("ALTER TABLE `agent_messages`", statements[3])
+        self.assertEqual(statements[4], "SET FOREIGN_KEY_CHECKS = 1")
+        self.assertFalse(any("unmanaged_table" in statement for statement in statements))
 
 
 if __name__ == "__main__":

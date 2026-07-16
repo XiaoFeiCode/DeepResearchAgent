@@ -1,18 +1,15 @@
 import base64
-import os
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Any
 
-from dotenv import find_dotenv, load_dotenv
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 
 from api.context import get_session_context
 from api.monitor import monitor
-
-load_dotenv(find_dotenv())
+from core.settings import get_settings
 
 SUPPORTED_IMAGE_TYPES = {
     ".jpg": "image/jpeg",
@@ -24,7 +21,7 @@ SUPPORTED_IMAGE_TYPES = {
 
 def _max_image_bytes() -> int:
     """读取单张图片大小上限，默认 10 MB。"""
-    max_mb = float(os.getenv("VISION_MAX_IMAGE_MB", "10"))
+    max_mb = get_settings().vision_max_image_mb
     return max(1, int(max_mb * 1024 * 1024))
 
 
@@ -101,34 +98,14 @@ def _build_data_url(image_path: Path) -> str:
 @lru_cache(maxsize=1)
 def get_vision_model() -> ChatOpenAI:
     """按需创建视觉模型客户端，避免项目启动时强制连接模型服务。"""
-    model_name = os.getenv("VISION_MODEL", "").strip()
-    if not model_name:
-        raise ValueError("未配置 VISION_MODEL，请在 .env 中填写支持图片输入的模型名称")
-
-    base_url = os.getenv("VISION_BASE_URL", "").strip()
-    api_key = (
-        os.getenv("VISION_API_KEY", "").strip()
-        or os.getenv("DASHSCOPE_API_KEY", "").strip()
-    )
-
-    # 没有单独配置视觉服务时，允许复用同一个 OpenAI 兼容服务。
-    if not base_url:
-        base_url = os.getenv("OPENAI_BASE_URL", "").strip()
-        api_key = api_key or os.getenv("OPENAI_API_KEY", "").strip()
-
-    if not base_url:
-        raise ValueError("未配置 VISION_BASE_URL，请填写视觉模型的 OpenAI 兼容接口地址")
-    if not api_key:
-        if base_url.startswith(("http://127.0.0.1", "http://localhost")):
-            api_key = "local-vllm"
-        else:
-            raise ValueError("未配置 VISION_API_KEY 或 DASHSCOPE_API_KEY")
+    settings = get_settings()
+    model_name, base_url, api_key = settings.require_vision_credentials()
 
     return ChatOpenAI(
         model=model_name,
         base_url=base_url,
         api_key=api_key,
-        timeout=float(os.getenv("VISION_REQUEST_TIMEOUT_SECONDS", "90")),
+        timeout=settings.vision_request_timeout_seconds,
         max_retries=2,
     )
 

@@ -30,7 +30,7 @@ class FileService:
         return saved_files
 
     def describe_uploads(self, thread_id: str, filenames: list[str]) -> list[dict]:
-        """Return trusted metadata for files already uploaded to one session."""
+        """返回已上传到指定会话的可信文件元数据。"""
         target_dir = self._upload_session_dir(thread_id)
         attachments: list[dict] = []
         seen: set[str] = set()
@@ -46,7 +46,7 @@ class FileService:
         return attachments
 
     def resolve_upload(self, thread_id: str, filename: str) -> Path:
-        """Resolve one uploaded attachment without allowing path traversal."""
+        """解析一个上传附件，并阻止路径穿越。"""
         safe_name = Path(filename).name
         if safe_name != filename:
             raise ValueError("无效的附件名称")

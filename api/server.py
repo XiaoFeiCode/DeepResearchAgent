@@ -1,3 +1,5 @@
+# ruff: noqa: E402
+
 import asyncio
 import sys
 from contextlib import asynccontextmanager
@@ -12,7 +14,7 @@ project_root = current_dir.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from agent.main_agent import close_main_agent_resources
+from agent.factory import close_main_agent_resources
 from api.monitor import manager
 from api.rate_limit import rate_limit_middleware
 from api.routers import (
@@ -32,12 +34,14 @@ from api.services import (
     RagflowService,
     TaskService,
 )
+from observability import initialize_tracing, shutdown_tracing
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """初始化共享服务，并在退出时有序回收后台任务和 Agent 资源。"""
     manager.set_loop(asyncio.get_running_loop())
+    initialize_tracing()
     auth_service = AuthService()
     await asyncio.to_thread(auth_service.initialize)
     conversation_service = ConversationService()
@@ -55,10 +59,11 @@ async def lifespan(app: FastAPI):
         await app.state.task_service.shutdown()
         await close_main_agent_resources()
         await manager.shutdown()
+        await asyncio.to_thread(shutdown_tracing)
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="DeepAgents API", lifespan=lifespan)
+    app = FastAPI(title="OmniResearch API", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],

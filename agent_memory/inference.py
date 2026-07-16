@@ -1,28 +1,19 @@
-"""Embedding and reranking clients for cloud APIs and local vLLM services."""
+"""云端 API 与本地 vLLM 的向量化和重排客户端。"""
 
 from __future__ import annotations
 
 import hashlib
 import math
-import os
 import re
 from typing import Any
 
 import httpx
 
-
-def _required_api_key(*names: str) -> str:
-    """Return the first configured API key without duplicating secrets in .env."""
-    for name in names:
-        value = os.getenv(name, "").strip()
-        if value:
-            return value
-    joined = ", ".join(names)
-    raise ValueError(f"Missing API key. Configure one of: {joined}")
+from core.settings import get_settings
 
 
 class HashEmbedding:
-    """Deterministic local fallback used when the vLLM service is unavailable."""
+    """vLLM 不可用时使用的确定性本地降级实现。"""
 
     def __init__(self, dimension: int) -> None:
         self.dimension = dimension
@@ -52,19 +43,14 @@ class HashEmbedding:
 
 
 class VLLMEmbeddingClient:
-    """OpenAI-compatible `/v1/embeddings` client served by vLLM."""
+    """调用 vLLM OpenAI 兼容 `/v1/embeddings` 接口的客户端。"""
 
     def __init__(self) -> None:
-        self.base_url = os.getenv(
-            "VLLM_EMBEDDING_BASE_URL",
-            "http://127.0.0.1:8001/v1",
-        ).rstrip("/")
-        self.model = os.getenv(
-            "VLLM_EMBEDDING_MODEL",
-            "BAAI/bge-small-zh-v1.5",
-        )
-        self.api_key = os.getenv("VLLM_EMBEDDING_API_KEY", "local-vllm")
-        self.timeout = float(os.getenv("VLLM_INFERENCE_TIMEOUT_SECONDS", "30"))
+        settings = get_settings()
+        self.base_url = settings.vllm_embedding_base_url
+        self.model = settings.vllm_embedding_model
+        self.api_key = settings.vllm_embedding_api_key
+        self.timeout = settings.vllm_inference_timeout_seconds
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         response = httpx.post(
@@ -79,19 +65,14 @@ class VLLMEmbeddingClient:
 
 
 class VLLMRerankerClient:
-    """Cohere-compatible `/v1/rerank` client served by vLLM."""
+    """调用 vLLM Cohere 兼容 `/v1/rerank` 接口的客户端。"""
 
     def __init__(self) -> None:
-        self.base_url = os.getenv(
-            "VLLM_RERANKER_BASE_URL",
-            "http://127.0.0.1:8002/v1",
-        ).rstrip("/")
-        self.model = os.getenv(
-            "VLLM_RERANKER_MODEL",
-            "BAAI/bge-reranker-base",
-        )
-        self.api_key = os.getenv("VLLM_RERANKER_API_KEY", "local-vllm")
-        self.timeout = float(os.getenv("VLLM_INFERENCE_TIMEOUT_SECONDS", "30"))
+        settings = get_settings()
+        self.base_url = settings.vllm_reranker_base_url
+        self.model = settings.vllm_reranker_model
+        self.api_key = settings.vllm_reranker_api_key
+        self.timeout = settings.vllm_inference_timeout_seconds
 
     def rerank(
         self,
@@ -131,23 +112,17 @@ class VLLMRerankerClient:
 
 
 class APIEmbeddingClient:
-    """OpenAI-compatible cloud embedding client, defaulting to Alibaba Bailian."""
+    """OpenAI 兼容云端向量客户端，默认使用阿里云百炼。"""
 
     def __init__(self, dimension: int) -> None:
-        self.base_url = os.getenv(
-            "MEMORY_EMBEDDING_BASE_URL",
-            "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        ).rstrip("/")
-        self.model = os.getenv("MEMORY_EMBEDDING_MODEL", "text-embedding-v4")
+        settings = get_settings()
+        self.base_url = settings.memory_embedding_base_url
+        self.model = settings.memory_embedding_model
         self.dimension = dimension
-        self.timeout = float(os.getenv("MEMORY_INFERENCE_TIMEOUT_SECONDS", "30"))
+        self.timeout = settings.memory_inference_timeout_seconds
 
     def embed(self, texts: list[str]) -> list[list[float]]:
-        api_key = _required_api_key(
-            "MEMORY_EMBEDDING_API_KEY",
-            "DASHSCOPE_API_KEY",
-            "VISION_API_KEY",
-        )
+        api_key = get_settings().memory_embedding_api_key_value()
         response = httpx.post(
             f"{self.base_url}/embeddings",
             headers={"Authorization": f"Bearer {api_key}"},
@@ -165,18 +140,13 @@ class APIEmbeddingClient:
 
 
 class APIRerankerClient:
-    """Alibaba Bailian text rerank API client."""
+    """阿里云百炼文本重排 API 客户端。"""
 
     def __init__(self) -> None:
-        self.endpoint = os.getenv(
-            "MEMORY_RERANKER_ENDPOINT",
-            (
-                "https://dashscope.aliyuncs.com/api/v1/services/rerank/"
-                "text-rerank/text-rerank"
-            ),
-        )
-        self.model = os.getenv("MEMORY_RERANKER_MODEL", "gte-rerank-v2")
-        self.timeout = float(os.getenv("MEMORY_INFERENCE_TIMEOUT_SECONDS", "30"))
+        settings = get_settings()
+        self.endpoint = settings.memory_reranker_endpoint
+        self.model = settings.memory_reranker_model
+        self.timeout = settings.memory_inference_timeout_seconds
 
     def rerank(
         self,
@@ -188,11 +158,7 @@ class APIRerankerClient:
         if not candidates:
             return []
 
-        api_key = _required_api_key(
-            "MEMORY_RERANKER_API_KEY",
-            "DASHSCOPE_API_KEY",
-            "VISION_API_KEY",
-        )
+        api_key = get_settings().memory_reranker_api_key_value()
         response = httpx.post(
             self.endpoint,
             headers={"Authorization": f"Bearer {api_key}"},
@@ -226,25 +192,16 @@ class APIRerankerClient:
 
 
 class MemoryInference:
-    """Select cloud API, vLLM, or hash inference through environment settings."""
+    """根据统一配置选择云端 API、vLLM 或哈希降级推理。"""
 
     def __init__(self, dimension: int) -> None:
-        self.embedding_provider = os.getenv(
-            "MEMORY_EMBEDDING_PROVIDER",
-            "api",
-        ).lower()
-        self.reranker_provider = os.getenv(
-            "MEMORY_RERANKER_PROVIDER",
-            self.embedding_provider,
-        ).lower()
-        self.reranker_enabled = os.getenv(
-            "MEMORY_RERANKER_ENABLED",
-            "true",
-        ).lower() not in {"0", "false", "no", "off"}
-        self.allow_fallback = os.getenv(
-            "MEMORY_ALLOW_HASH_FALLBACK",
-            "false",
-        ).lower() not in {"0", "false", "no", "off"}
+        settings = get_settings()
+        self.embedding_provider = settings.memory_embedding_provider
+        self.reranker_provider = (
+            settings.memory_reranker_provider or self.embedding_provider
+        )
+        self.reranker_enabled = settings.memory_reranker_enabled
+        self.allow_fallback = settings.memory_allow_hash_fallback
         self._hash = HashEmbedding(dimension)
         self._api_embedding = APIEmbeddingClient(dimension)
         self._api_reranker = APIRerankerClient()

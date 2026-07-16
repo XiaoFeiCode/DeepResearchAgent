@@ -2,13 +2,14 @@ import base64
 import hashlib
 import hmac
 import json
-import os
 import time
 from dataclasses import dataclass
 from typing import Any
 
 from fastapi import HTTPException, Security, WebSocket, status
 from fastapi.security import OAuth2PasswordBearer, SecurityScopes
+
+from core.settings import get_settings
 
 SCOPE_DESCRIPTIONS = {
     "task": "运行智能体任务",
@@ -34,16 +35,15 @@ class AuthenticatedUser:
 
 
 def _is_auth_enabled() -> bool:
-    return os.getenv("API_AUTH_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
+    return get_settings().api_auth_enabled
 
 
 def _token_secret() -> bytes:
-    return os.getenv("API_AUTH_SECRET", "deep-agent-dev-secret-change-me").encode("utf-8")
+    return get_settings().api_auth_secret.encode("utf-8")
 
 
 def _token_expire_seconds() -> int:
-    minutes = int(os.getenv("API_TOKEN_EXPIRE_MINUTES", "120"))
-    return max(minutes, 1) * 60
+    return get_settings().api_token_expire_minutes * 60
 
 
 def _b64url_encode(data: bytes) -> str:
