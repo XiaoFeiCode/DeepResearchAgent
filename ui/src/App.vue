@@ -85,6 +85,7 @@ const {
   newDatasetDescription,
   newDatasetName,
   parseDocument: parseKnowledgeDocument,
+  parsingDocumentId,
   selectedDataset,
   selectedDatasetId,
   selectedFiles: selectedKbFiles,
@@ -556,6 +557,7 @@ onBeforeUnmount(() => {
         :loading="ragflowLoading"
         :uploading="ragflowUploading"
         :creating="ragflowCreating"
+        :parsing-document-id="parsingDocumentId"
         :message="ragflowMessage"
         :error="ragflowError"
         :new-dataset-name="newDatasetName"

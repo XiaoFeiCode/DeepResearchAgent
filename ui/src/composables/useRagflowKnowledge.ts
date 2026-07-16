@@ -11,6 +11,7 @@ export const useRagflowKnowledge = () => {
   const loading = ref(false)
   const uploading = ref(false)
   const creating = ref(false)
+  const parsingDocumentId = ref('')
   const newDatasetName = ref('')
   const newDatasetDescription = ref('')
   const message = ref('')
@@ -129,7 +130,8 @@ export const useRagflowKnowledge = () => {
   }
 
   const parseDocument = async (document: RagflowDocument) => {
-    if (!selectedDatasetId.value) return
+    if (!selectedDatasetId.value || parsingDocumentId.value) return
+    parsingDocumentId.value = document.id
     try {
       showMessage('')
       const data = await ragflowApi.parseDocument(selectedDatasetId.value, document.id)
@@ -137,10 +139,14 @@ export const useRagflowKnowledge = () => {
         showMessage(data.error, true)
         return
       }
-      showMessage(`已提交解析：${document.name}`)
-      await fetchDocuments()
+      showMessage(`已提交解析任务：${document.name}`)
+      window.setTimeout(async () => {
+        await fetchDocuments()
+        parsingDocumentId.value = ''
+      }, 1500)
     } catch (requestError) {
       showMessage(`解析文档失败：${getErrorMessage(requestError)}`, true)
+      parsingDocumentId.value = ''
     }
   }
 
@@ -175,6 +181,7 @@ export const useRagflowKnowledge = () => {
     newDatasetDescription,
     newDatasetName,
     parseDocument,
+    parsingDocumentId,
     selectedDataset,
     selectedDatasetId,
     selectedFiles,

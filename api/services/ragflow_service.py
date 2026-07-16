@@ -212,15 +212,23 @@ class RagflowService:
         }
 
     def parse_documents(self, dataset_name_or_id: str, names_or_ids: str) -> dict:
+        """?? RAGFlow ???????????????????????"""
         dataset = self._require_dataset(dataset_name_or_id)
         documents, missing = _find_documents(dataset, names_or_ids)
         if not documents:
             raise LookupError(f"未找到文档: {', '.join(missing)}")
 
         document_ids = [_get_id(document) for document in documents if _get_id(document)]
+        client = get_ragflow_client()
+        response = requests.post(
+            f"{client.api_url}/datasets/{_get_id(dataset)}/documents/parse",
+            headers=client.authorization_header,
+            json={"document_ids": document_ids},
+            timeout=30,
+        )
         return {
-            "status": "parsed",
-            "parse_status": dataset.parse_documents(document_ids),
+            "status": "parse_submitted",
+            "parse_status": _response_data(response, "提交 RAGFlow 文档解析"),
             "missing": missing,
         }
 
